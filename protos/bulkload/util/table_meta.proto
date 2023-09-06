@@ -1,0 +1,77 @@
+syntax = "proto3";
+
+import "util/table_common.proto";
+import 'util/object_identifier.proto';
+
+package util;
+option go_package = "github.com/clickzetta/goclickzetta/protos/bulkload/util";
+
+message TableSchemaList {
+  repeated TableSchema schemas = 1;
+  // IDs Integer.MAX_VALUE - (1-100) are used for metadata columns
+  // IDs Integer.MAX_VALUE - (101-200) are used for reserved columns
+  uint32 highest_field_id = 3;
+}
+
+message FieldSpecList {
+  repeated FieldSpec specs = 1;
+  uint32 current_spec_id = 2;
+}
+
+message CompositeFieldSpecList {
+  repeated FieldSpecList spec_list = 1;
+  uint32 current_spec_id = 2;
+}
+
+message DataFileInfo {
+  string file_path = 1;  // from Iceberg DataFile's file_path field
+  uint64 file_size_in_bytes = 2;  // from Iceberg DataFile's file_size_in_bytes field
+}
+
+message DataFileSplitSource {
+  ObjectIdentifier table_identifier = 1;
+  repeated DataFileInfo data_file_info = 2;
+  // uint64 snapshot = 2;
+}
+
+message TableFormatInfo {
+  // common fields
+  int64 snapshot_id = 1;      // dependency on snapshot id of table
+
+  message Iceberg {
+    string metadata_location = 1;
+    int64 current_version = 2;
+  }
+  // extended table format
+  oneof format {
+    Iceberg iceberg = 10;
+  }
+}
+
+message TableFormat {
+  repeated TableFormatInfo table_format_infos = 1;
+}
+
+message TableMeta {
+  int64 table_id = 1;
+  TableType table_type = 2;
+
+  //  uint64 last_access_time = 12;
+  TableSchema table_schema = 15;
+  DataSource data_source = 16;
+
+  FieldSpec primary_key_spec = 21;
+  FieldSpec sort_order_spec = 22;
+  repeated FieldSpec cluster_info_spec = 23;
+  repeated FieldSpec unique_key_spec = 24;
+  repeated FieldSpec index_spec = 26;
+  repeated FieldSpec foreign_key_spec = 31;
+
+  View view = 25;
+
+  // TODO(chendong): check whether the snapshot id change if schema is changed
+  int64 current_snapshot_id = 27;
+  // repeated uint64 snapshots = 28;
+
+  TableFormat table_format = 30;
+}

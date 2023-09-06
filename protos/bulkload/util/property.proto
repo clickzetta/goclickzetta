@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+package util;
+option go_package = "github.com/clickzetta/goclickzetta/protos/bulkload/util";
+
+message Property {
+  string key = 1;
+  string value = 2;
+}
+
+message Properties {
+  repeated Property properties = 1;
+}

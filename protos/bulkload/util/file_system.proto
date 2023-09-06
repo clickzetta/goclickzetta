@@ -1,0 +1,12 @@
+syntax = "proto3";
+
+package util;
+option go_package = "github.com/clickzetta/goclickzetta/protos/bulkload/util";
+
+enum FileSystemType {
+  LOCAL = 0;
+  OSS = 1;
+  CACHE = 2;
+  RPC = 3;
+  COS = 4;
+}

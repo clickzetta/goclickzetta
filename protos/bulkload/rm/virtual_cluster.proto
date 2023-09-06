@@ -1,0 +1,100 @@
+syntax = "proto3";
+package rm;
+option go_package = "github.com/clickzetta/goclickzetta/protos/bulkload/rm";
+
+// general protos
+enum VClusterSize {
+  XSMALL = 0;
+  SMALL = 1;
+  MEDIUM = 2;
+  LARGE = 3;
+  XLARGE = 4;
+  X2LARGE = 5;
+  X3LARGE = 6;
+  X4LARGE = 7;
+  X5LARGE = 8;
+  X6LARGE = 9;
+  // internal size type
+  CUSTOMIZED3 = 101; // customized spec for 3 executors (24 cores)
+  CUSTOMIZED52 = 102; // customized spec for 52 executors (416 cores)
+  CUSTOMIZED48 = 103; // customized spec for 48 executors (384 cores)
+  CUSTOMIZED12 = 104; // customized spec for 12 executors (96 cores)
+}
+enum VClusterType {
+  GENERAL = 0;
+  ANALYTICS = 1;
+}
+enum ScalePolicy {
+  STANDARD = 0;
+  // ECONOMY = 1; // not supported in MVP
+}
+
+message AnalyticsProperties {
+  optional int32 min_replicas = 1;
+  optional int32 max_replicas = 2;
+  optional int32 max_concurrency_per_replica = 3;
+  optional ScalePolicy scale_policy = 4;
+  optional string preload_tables = 5;
+}
+
+message GeneralProperties {
+  optional VClusterSize cluster_max_size = 1;
+}
+
+message VCResource {
+  optional int64 memory = 1;
+  optional int32 virtual_cores = 2;
+}
+
+message VirtualClusterProperties {
+  optional string name = 1;
+  optional int64 instance_id = 2;
+  optional int64 workspace_id = 3;
+  optional VClusterType cluster_type = 4;
+  optional VClusterSize cluster_size = 5;
+  oneof resource_oneof {
+    AnalyticsProperties analytics_properties = 6;
+    GeneralProperties general_properties = 7;
+  }
+  optional int32 auto_stop_latency_sec = 8;
+  optional bool auto_start_enabled = 9;
+  map<string, string> tag = 10;
+  optional string comment = 11;
+  optional int32 query_process_time_limit_sec = 13;
+  optional int64 create_time_ms = 14;
+  optional int64 last_modify_time_ms = 15;
+  optional int64 creator_user_id = 16;
+  optional string version = 17;
+}
+
+enum VirtualClusterState {
+  SUSPENDED = 0;
+  RUNNING = 1;
+  STARTING = 2;
+  SCALING_UP = 3;
+  SCALING_DOWN = 4;
+  SUSPENDING = 5;
+  DROPPING = 6;
+  ERROR = 7;
+  DELETED = 8;
+  RESUMING = 9;
+  CANCELLING = 10;
+}
+
+// rpc status
+enum Status {
+  SUCCEEDED = 0;
+  FAILED = 1;
+}
+
+message RequestInfo {
+  optional string request_id = 1;
+  optional bytes operator_token = 2;
+}
+
+message ResponseInfo {
+  optional string request_id = 1;
+  optional Status status = 2;
+  optional string error_code = 3;
+  optional string error_msg = 4;
+}

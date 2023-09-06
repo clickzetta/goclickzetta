@@ -1,0 +1,64 @@
+syntax = "proto3";
+
+package util;
+option go_package = "github.com/clickzetta/goclickzetta/protos/bulkload/util";
+
+import "util/bucket_info.proto";
+import "util/file_format_type.proto";
+import "util/statistics.proto";
+import "util/virtual_value_info.proto";
+
+
+
+enum FileType {
+  UNKNOWN_FILE = 0;
+  DATA_FILE = 1;
+  DELTA_FILE = 2;
+}
+
+message BlockInfo {
+  uint64 offset = 1;
+  uint64 length = 2;
+  // other block meta of file
+}
+
+message DataLayout {
+  // footer offset range
+  BlockInfo footer = 1;
+  // block (parquet row group or orc stripe) offset range
+  repeated BlockInfo blocks = 2;
+  // bucket:[blocks]
+  // For a partitioned table, there might be multiple buckets
+  // with same bucket_id, but fall into different partitions.
+  repeated BucketInfo buckets = 3;
+  // A set of values of virtual columns in the file.
+  repeated VirtualValueInfo value_info = 4;
+  // Number of rows to limit a parquet page or orc row group.
+  optional int32 row_index_stride = 5;
+  // Number of rows per block (parquet row group or orc stripe)
+  repeated int64 block_row_counts = 6;
+  // other organization info of file
+}
+
+message ExtendedMetaData {
+  map<string, string> key_value = 1;
+}
+
+message FileMetaData {
+  string file_path = 1;
+  FileFormatType file_format = 2;
+  FileType file_type = 3;
+  int64 file_slice_id = 4;
+  int64 file_slice_version = 5;
+  int32 compaction_level = 6;
+
+  optional uint32 cluster_spec_id = 7;          // TableMeta.cluster_info_spec.spec_id
+  optional uint32 sort_order_spec_id = 8;       // TableMeta.sort_order_spec.spec_id
+  optional uint32 primary_key_spec_id = 9;      // TableMeta.primary_key_spec.spec_id
+
+  DataLayout layout = 10;
+  ExtendedMetaData extended_metadata = 11;
+
+  // file level statistics
+  StatsData stats = 16;
+}

@@ -1,0 +1,23 @@
+syntax = "proto3";
+
+package util;
+option go_package = "github.com/clickzetta/goclickzetta/protos/bulkload/util";
+
+import 'util/object_identifier.proto';
+
+message Share {
+  ObjectIdentifier provider_workspace = 1;
+
+  enum Kind {
+    INBOUND = 0;
+    OUTBOUND = 1;
+  }
+  // Kind is only for show shares
+  Kind kind = 2;
+
+  enum Scope {
+    PRIVATE = 0;
+    PUBLIC = 1;
+  }
+  Scope scope = 3;
+}

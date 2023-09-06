@@ -1,0 +1,67 @@
+syntax = "proto3";
+
+package util;
+option go_package = "github.com/clickzetta/goclickzetta/protos/bulkload/util";
+
+enum ObjectType {
+  UNKNOWN = 0;
+  INSTANCE = 1;
+  NETWORK_POLICY = 2;
+
+  WORKSPACE = 100;
+  SHARE = 101;
+
+  SCHEMA = 200;
+  DATALAKE = 201;
+  USER = 202;
+  ROLE = 203;
+  VIRTUAL_CLUSTER = 104;
+  JOB = 205;
+  CONNECTION = 206;
+
+  TABLE = 300;
+  FUNCTION = 301;
+
+  INDEX = 400;
+
+  FILE = 500;
+}
+
+message ObjectState {
+  enum Type {
+    ONLINE = 0;
+    DELETED = 1;
+    STAGED = 2;
+  }
+}
+
+message ObjectIdentifier {
+  ObjectType type = 1;
+
+  // account identifier
+  optional int64 account_id = 6;
+  optional string account_name = 7;
+
+  // instance identifier
+  int64 instance_id = 2;
+  optional string instance_name = 5;
+
+  // namespace identifier
+  repeated string namespace = 3;
+  repeated int64 namespace_id = 10;
+
+  // object identifier
+  string name = 4;
+  int64 id = 9;
+}
+
+message ObjectIdentifierList {
+  repeated ObjectIdentifier identifiers = 1;
+}
+
+enum PrincipalType {
+  PT_USER = 0;
+  PT_SYSTEM = 1;
+  PT_SERVICE_SYSTEM = 2;
+  PT_SERVICE_CUSTOMER = 4;
+}

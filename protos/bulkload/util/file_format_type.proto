@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+package util;
+option go_package = "github.com/clickzetta/goclickzetta/protos/bulkload/util";
+
+enum FileFormatType {
+  TEXT = 0;
+  PARQUET = 1;
+  ORC = 2;
+  AVRO = 3;
+  CSV = 4;
+  ARROW = 5; // Arrow IPC format
+  HIVE_RESULT = 96;
+  DUMMY = 97;
+  MEMORY = 98;
+  ICEBERG = 99;  //TODO(king) HACK, remove this after iceberg jni API removed
+}

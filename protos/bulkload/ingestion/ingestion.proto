@@ -1,0 +1,377 @@
+syntax = "proto3";
+
+package ingestion;
+option go_package = "github.com/clickzetta/goclickzetta/protos/bulkload/ingestion";
+
+import "util/data_type.proto";
+import "util/file_format_type.proto";
+
+/**
+ * all gateway method list.
+ */
+enum MethodEnum {
+  GATEWAY_RPC_CALL = 0;
+  GET_TABLE_META = 1;
+  CREATE_TABLET = 2;
+  GET_MUTATE_WORKER = 3;
+  COMMIT_TABLET = 4;
+  DROP_TABLET = 5;
+  CHECK_TABLE_EXISTS = 6;
+  /*** BEGIN ENUMS TO DEPRECATE ***/
+  CREATE_PENDING_STREAM = 7;
+  COMMIT_PENDING_STREAM = 8;
+  GET_PENDING_STREAM = 9;
+  JOIN_PENDING_STREAM = 10;
+  /*** END ENUMS TO DEPRECATE ***/
+  CREATE_BULK_LOAD_STREAM = 11;
+  GET_BULK_LOAD_STREAM = 12;
+  COMMIT_BULK_LOAD_STREAM = 13;
+  OPEN_BULK_LOAD_STREAM_WRITER = 14;
+  FINISH_BULK_LOAD_STREAM_WRITER = 15;
+  /*** V2 INTERFACE ENUMS ***/
+  CREATE_OR_GET_STREAM_V2 = 16;
+  CLOSE_STREAM_V2 = 17;
+  GET_ROUTE_WORKER_V2 = 18;
+  CREATE_BULK_LOAD_STREAM_V2 = 19;
+  GET_BULK_LOAD_STREAM_V2 = 20;
+  COMMIT_BULK_LOAD_STREAM_V2 = 21;
+  OPEN_BULK_LOAD_STREAM_WRITER_V2 = 22;
+  FINISH_BULK_LOAD_STREAM_WRITER_V2 = 23;
+}
+
+enum IGSTableType {
+  NORMAL = 0;
+  CLUSTER = 1;
+  ACID = 2;
+}
+
+message GatewayRequest {
+  int32 methodEnumValue = 1;
+  string message = 2;
+  int64 instanceId = 3;
+  int64 userId = 4;
+}
+
+message GatewayResponse {
+  GateWayResponseStatus status = 1;
+  string message = 2;
+}
+// common
+
+message UserIdentifier {
+  int64 instance_id = 1;
+  string workspace = 2;
+  string user_name = 3;
+  int64 user_id = 4;
+}
+
+message Account {
+  UserIdentifier user_ident = 1;
+  string token = 2;
+}
+
+message TableIdentifier {
+  int64 instance_id = 1;
+  string workspace = 2;
+  string schema_name = 3;
+  string table_name = 4;
+}
+
+enum Code {
+  SUCCESS = 0;
+  FAILED = 1;
+  THROTTLED = 2;
+}
+
+message GateWayResponseStatus {
+  Code code = 1;
+  string message = 2;
+  string request_id = 3;
+}
+
+message ResponseStatus {
+  Code code = 1;
+  string error_message = 2;
+  string request_id = 3;
+}
+
+// controller
+
+message DataField {
+  string name = 1;
+  util.DataType type = 2;
+}
+
+message DistributionSpec {
+  repeated uint32 field_ids = 1;
+  repeated string hash_functions = 2;
+  uint32 num_buckets = 3;
+}
+
+message PrimaryKeySpec {
+  repeated uint32 field_ids = 1;
+}
+
+message PartitionSpec {
+  repeated uint32 src_field_ids = 1;
+}
+
+message StreamSchema {
+  repeated DataField data_fields = 1;
+  DistributionSpec dist_spec = 2; // optional
+  PrimaryKeySpec primary_key_spec = 3; // optional
+  PartitionSpec partition_spec = 4; // optional
+}
+
+message CreateOrGetStreamRequest {
+  Account account = 1;
+  TableIdentifier table_ident = 2;
+  uint32 num_tablets = 3;
+}
+
+message CreateOrGetStreamResponse {
+  TableIdentifier table_ident = 1;
+  StreamSchema data_schema = 2;
+  bool already_exists = 3;
+  ResponseStatus status = 4;
+}
+
+message CloseStreamRequest {
+  Account account = 1;
+  TableIdentifier table_ident = 2;
+}
+
+message CloseStreamResponse {
+  ResponseStatus status = 1;
+}
+
+// bulk load
+
+enum BulkLoadStreamState {
+  BL_CREATED = 0;
+  BL_SEALED = 1;
+  BL_COMMIT_SUBMITTED = 2;
+  BL_COMMIT_SUCCESS = 3;
+  BL_COMMIT_FAILED = 4;
+  BL_CANCELLED = 5;
+};
+
+enum BulkLoadStreamOperation {
+  BL_APPEND = 0;
+  BL_OVERWRITE = 1;
+  BL_UPSERT = 2;
+}
+
+message OssStagingPathInfo {
+  string path = 1;
+  string sts_ak_id = 3;
+  string sts_ak_secret = 4;
+  string sts_token = 5;
+  string oss_endpoint = 6;
+  string oss_internal_endpoint = 7;
+  uint64 oss_expire_time = 8;
+}
+
+message CosStagingPathInfo {
+  string path = 1;
+  string sts_ak_id = 2;
+  string sts_ak_secret = 3;
+  string sts_token = 4;
+  string cos_region = 5;
+  uint64 cos_expire_time = 6;
+}
+
+message StagingPathInfo {
+  oneof path_info {
+    OssStagingPathInfo oss_path = 1;
+    CosStagingPathInfo cos_path = 2;
+  }
+}
+
+message BulkLoadStreamInfo {
+  string stream_id = 1;
+  BulkLoadStreamState stream_state = 2;
+  string sql_job_id = 3;
+  TableIdentifier identifier = 4;
+  BulkLoadStreamOperation operation = 5;
+  string partition_spec = 6;
+  repeated string record_keys = 7;
+  StreamSchema stream_schema = 8;
+  string sql_error_msg = 9;
+  bool prefer_internal_endpoint = 10;
+  // Encryption config of cloud object stores.
+  // Use a map here as these options vary from cloud to cloud.
+  map<string, string> encryption_options = 11;
+}
+
+message BulkLoadStreamWriterConfig {
+  StagingPathInfo staging_path = 1;
+  util.FileFormatType file_format = 2;
+  int64 max_num_rows_per_file = 3;
+  int64 max_size_in_bytes_per_file = 4;
+}
+
+message CreateBulkLoadStreamRequest {
+  Account account = 1;
+  TableIdentifier identifier = 2;
+  BulkLoadStreamOperation operation = 3;
+  string partition_spec = 4;
+  repeated string record_keys = 5;
+  bool prefer_internal_endpoint = 6;
+}
+
+message CreateBulkLoadStreamResponse {
+  ResponseStatus status = 1;
+  BulkLoadStreamInfo info = 2;
+}
+
+message GetBulkLoadStreamRequest {
+  Account account = 1;
+  TableIdentifier identifier = 2;
+  string stream_id = 3;
+  bool need_table_meta = 4;
+}
+
+message GetBulkLoadStreamResponse {
+  ResponseStatus status = 1;
+  BulkLoadStreamInfo info = 2;
+}
+
+message CommitBulkLoadStreamRequest {
+  Account account = 1;
+  TableIdentifier identifier = 2;
+  string stream_id = 3;
+
+  string execute_workspace = 4;
+  string execute_vc_name = 5;
+
+  enum CommitMode {
+    COMMIT_STREAM = 0;
+    ABORT_STREAM = 1;
+  }
+
+  CommitMode commit_mode = 6;
+  // Is spec_partition_ids required?
+  repeated uint32 spec_partition_ids = 7; // if empty, will commit all finished partition
+}
+
+message CommitBulkLoadStreamResponse {
+  ResponseStatus status = 1;
+  BulkLoadStreamInfo info = 2;
+}
+
+message OpenBulkLoadStreamWriterRequest {
+  Account account = 1;
+  TableIdentifier identifier = 2;
+  string stream_id = 3;
+  uint32 partition_id = 4;
+}
+
+message OpenBulkLoadStreamWriterResponse {
+  ResponseStatus status = 1;
+  BulkLoadStreamWriterConfig config = 2;
+}
+
+message FinishBulkLoadStreamWriterRequest {
+  Account account = 1;
+  TableIdentifier identifier = 2;
+  string stream_id = 3;
+  uint32 partition_id = 4;
+  repeated string written_files = 5;
+  repeated uint64 written_lengths = 6;
+}
+
+message FinishBulkLoadStreamWriterResponse {
+  ResponseStatus status = 1;
+}
+
+enum ConnectMode {
+  DIRECT = 0;
+  GATEWAY = 1;
+  GATEWAY_INTERNAL = 2;
+}
+
+message GetRouteWorkersRequest {
+  TableIdentifier table_ident = 1;
+  ConnectMode connect_mode = 2;
+  repeated int64 tablet_id = 3;
+}
+
+message HostPortTuple {
+  string host = 1;
+  int32 port = 2;
+}
+
+message GetRouteWorkersResponse {
+  repeated HostPortTuple tuple = 1;
+  repeated int64 tablet_id = 2;
+  ResponseStatus status = 3;
+}
+
+service IngestionControllerService {
+  rpc GatewayRpcCall(GatewayRequest) returns (GatewayResponse);
+  rpc CreateOrGetStream(CreateOrGetStreamRequest) returns (CreateOrGetStreamResponse);
+  rpc CloseStream(CloseStreamRequest) returns (CloseStreamResponse);
+
+  rpc GetRouteWorkers(GetRouteWorkersRequest) returns (GetRouteWorkersResponse);
+
+  rpc CreateBulkLoadStream(CreateBulkLoadStreamRequest) returns (CreateBulkLoadStreamResponse);
+  rpc GetBulkLoadStream(GetBulkLoadStreamRequest) returns (GetBulkLoadStreamResponse);
+  rpc CommitBulkLoadStream(CommitBulkLoadStreamRequest) returns (CommitBulkLoadStreamResponse);
+  rpc OpenBulkLoadStreamWriter(OpenBulkLoadStreamWriterRequest) returns (OpenBulkLoadStreamWriterResponse);
+  rpc FinishBulkLoadStreamWriter(FinishBulkLoadStreamWriterRequest) returns (FinishBulkLoadStreamWriterResponse);
+}
+
+// worker
+
+enum OperationType {
+  UNKNOWN = 0;
+  INSERT = 1;
+  UPDATE = 2;
+  DELETE = 3;
+  UPSERT = 4;
+  INSERT_IGNORE = 5;
+  UPDATE_IGNORE = 6;
+  DELETE_IGNORE = 7;
+}
+
+message OperationTypeList {
+  repeated OperationType op_types = 1;
+}
+
+message DataBlock {
+  bytes arrow_payload = 1;
+  bytes is_set_bitmaps_payload = 2; // optional, (rows * cols) bits
+  oneof op_type_info {
+    OperationTypeList row_op_type_list = 3;
+    OperationType block_op_type = 4;
+  }
+  uint32 bucket_id = 5; // maybe NO_BUCKETID
+  uint32 num_rows = 6;  // nums of row in data block.
+}
+
+message MutateRowStatus {
+  Code code = 1;
+  string error_message = 2;
+  int32 row_index = 3;
+}
+
+message MutateRequest {
+  Account account = 1;
+  TableIdentifier table_ident = 2;
+  int64 batch_id = 3;
+  int64 write_timestamp = 4;
+  repeated DataBlock data_blocks = 5;
+}
+
+message MutateResponse {
+  int64 batch_id = 1;
+  int64 num_rows = 2;
+  ResponseStatus status = 3;
+  repeated MutateRowStatus row_status_list = 4;
+}
+
+service IngestionWorkerService {
+  rpc Mutate(stream MutateRequest) returns (stream MutateResponse);
+  rpc MutateInternal(stream MutateRequest) returns (stream MutateResponse);
+}

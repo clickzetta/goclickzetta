@@ -1,0 +1,15 @@
+syntax = "proto3";
+
+package util;
+option go_package = "github.com/clickzetta/goclickzetta/protos/bulkload/util";
+
+message NetworkPolicy {
+  NetworkPolicyData     content       = 1;
+}
+
+message NetworkPolicyData {
+  repeated string       workspaceList = 1;
+  repeated string       usernameList  = 2;
+  repeated string       blockedList   = 3;
+  repeated string       allowedList   = 4;
+}

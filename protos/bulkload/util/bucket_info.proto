@@ -1,0 +1,10 @@
+syntax = "proto3";
+
+package util;
+option go_package = "github.com/clickzetta/goclickzetta/protos/bulkload/util";
+
+message BucketInfo {
+  uint32 bucket_id = 1;
+  repeated uint32 block_ids = 2;
+  // other bucket meta of file level
+}

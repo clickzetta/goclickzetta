@@ -1,0 +1,122 @@
+syntax = "proto3";
+
+package util;
+option go_package = "github.com/clickzetta/goclickzetta/protos/bulkload/util";
+
+import "util/expression.proto";
+import "util/data_type.proto";
+
+message SortKeys {
+  repeated uint32 keys = 1;
+}
+
+message FieldBounds {
+  map<uint32, Constant> bounds = 1;
+}
+
+message StatsData {
+  int64 snapshot_id = 1;
+  optional int64 size_in_bytes = 2;
+  optional int64 record_count = 3;
+
+  FieldsStats fields_stats = 5;
+
+  // file level sort key lower bound, field id -> value
+  FieldBounds sort_key_lower_bounds = 12;
+  // file level sort key upper bound, field id -> value
+  FieldBounds sort_key_upper_bounds = 13;
+}
+
+message FieldsStats {
+  repeated FieldStats field_stats = 1;
+}
+
+message FieldStats {
+  repeated uint32 field_id = 1;
+  repeated FieldStatsValue stats_value = 2;
+}
+
+message FieldStatsValue {
+  oneof value {
+    int64 nan_count = 1;
+    int64 value_count = 2;
+    int64 null_count = 3;
+    Constant lower_bounds = 4;
+    Constant upper_bounds = 5;
+    double avg_size = 6;
+    int64 max_size = 7;
+    int64 compressed_size = 8;
+    int64 distinct_number = 9;
+    TopK top_k = 10;
+    Histogram histogram = 11;
+    // Size in bytes of columnar data before any encoding or compression.
+    // * For fix-sized type, it's always `value_count * parquet::GetTypeByteSize(T)`,
+    //   value_count includes null data.
+    // * For variable-length type, it's `value_count * parquet::GetTypeByteSize(T)
+    //   + variable-length`.
+    // For complex type, leaf will be counted, and non-leaf types would be the
+    // sum of all leaf-type raw size.
+    int64 raw_size_in_bytes = 12;
+  }
+}
+
+message TopK {
+  repeated Constant top_k = 1;
+}
+
+message HistogramBucket {
+  Constant lower_bound = 1;
+  Constant upper_bound = 2;
+  int64 value_count = 3;
+}
+
+message Histogram {
+  repeated HistogramBucket buckets = 1;
+}
+
+/*
+ * for range distribution boundaries
+ */
+
+message ValuePoint {
+  repeated Constant values = 1;
+}
+
+message BoundaryPoint {
+  bool included = 1;
+  oneof value {
+    bool unbounded = 2;
+    ValuePoint value_point = 3;
+  }
+};
+
+message Boundary {
+  BoundaryPoint lower = 1;
+  BoundaryPoint upper = 2;
+}
+
+message RangeBoundary {
+  uint64 id = 1;
+  repeated DataType types = 2;
+  repeated Boundary ranges = 3;
+}
+
+message EnforceBoundary {
+  string table_name = 1;
+  RangeBoundary boundaries = 2;
+}
+
+message TableBoundary {
+  repeated EnforceBoundary table_boundaries = 1;
+}
+
+/*
+ * end for range distribution boundaries
+ */
+
+// file input the min and max of columns
+message FieldRange {
+  uint32 field_id = 1;
+  DataType type = 2;
+  Boundary range = 3;
+}

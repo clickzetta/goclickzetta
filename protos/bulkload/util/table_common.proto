@@ -1,0 +1,236 @@
+syntax = "proto3";
+
+import "util/data_type.proto";
+import "util/file_format_type.proto";
+import "util/file_system.proto";
+import 'util/object_identifier.proto';
+import 'util/expression.proto';
+
+package util;
+option go_package = "github.com/clickzetta/goclickzetta/protos/bulkload/util";
+
+enum Order {
+  ASC = 0;
+  DESC = 1;
+}
+
+enum ClusterType {
+  NORMAL = 0;
+  RANGE = 1;
+  HASH = 2;
+}
+
+enum HashBucketType {
+  HASH_MOD = 0;
+  HASH_RANGE = 1;
+};
+
+enum TableType {
+  MANAGED_TABLE = 0;
+  EXTERNAL_TABLE = 2;
+  VIRTUAL_VIEW = 4;
+  MATERIALIZED_VIEW = 6;
+  UNKNOWN_TABLE = 99;
+}
+
+enum IndexType {
+  BLOOM_FILTER = 0;
+}
+
+message FieldRef {
+  oneof field {
+    // 1. field_id and field_name are FieldSchema's id and name respectively
+    // 2. field_name is only used for creating table, when filed_id has not been assigned yet.
+    // 3. field_id is used for almost all the cases except item 2.
+    uint32 field_id = 1;
+    string field_name = 2;
+  }
+}
+
+message SortedField {
+  FieldRef field = 1;
+  Order sort_order = 2;
+}
+
+message HashCluster {
+  uint32 function_version = 1;
+  HashBucketType bucket_type = 2;
+}
+
+message RangeCluster {
+  RangeType range_type = 1;
+}
+
+enum RangeType {
+  FIXED_POINT = 0; // like hive partition
+  FIXED_RANGE = 2; // like oracle partition that has a range but it must be constant eg: less then 100
+  DYNAMIC_RANGE = 4;
+}
+
+message ClusterInfo {
+  ClusterType cluster_type = 1;
+  repeated FieldRef clustered_fields = 2;
+  optional uint64 buckets_count = 3;
+  optional string path_pattern = 4;
+
+  oneof cluster {
+    HashCluster hash = 10;
+    RangeCluster range = 11;
+  }
+}
+
+message SortOrder {
+  repeated SortedField sorted_fields = 1;
+}
+
+message UniqueKey {
+  repeated FieldRef unique_fields = 1;
+  bool enable = 2;
+  bool validate = 3;
+  bool rely = 4;
+}
+
+message PrimaryKey {
+  repeated FieldRef fields = 1;
+  bool enable = 2;
+  bool validate = 3;
+  bool rely = 4;
+}
+
+message IndexKey {
+  repeated FieldRef fields = 1;
+}
+
+message Index {
+  IndexType type = 1;
+  IndexKey key = 2;
+  ObjectIdentifier table = 3;
+}
+
+message FieldSpec {
+  uint32 spec_id = 1;  // field spec version
+  oneof spec {
+    ClusterInfo cluster_info = 10;
+    SortOrder sort_order = 11;
+    UniqueKey unique_key = 12;
+    PrimaryKey primary_key = 13;
+    Index index = 14;
+    // partition spec
+  }
+}
+
+
+message FieldSchema {
+  string name = 2;
+  DataType type = 3;
+  optional bool virtual = 4;
+  optional bool hidden = 5;
+  optional bool un_output = 6;
+  string comment = 7;
+  ScalarExpression expr = 8;
+  optional string transform = 9;
+}
+
+message TableSchema {
+  repeated FieldSchema fields = 1;
+  uint32 schema_id = 2;
+  string type = 3;  // meta internal use, for compatible with Iceberg, default to "struct"
+}
+
+message TextFileFormat {
+  // TODO(gang.wu): remove options and explicitly define properties
+  map<string, string> options = 1;
+}
+
+message ParquetFileFormat {
+  int64 row_group_size_bytes = 1;
+  int64 page_size_bytes = 2;
+  int64 dict_size_bytes = 3;
+}
+
+message OrcFileFormat {
+}
+
+message CsvFileFormat {
+  // TODO(gang.wu): remove options and explicitly define properties
+  map<string, string> options = 1;
+}
+
+message HiveResultFileFormat {
+  // TODO(gang.wu): remove options and explicitly define properties
+  map<string, string> options = 1;
+}
+
+message AvroFileFormat {
+
+}
+
+message ArrowFileFormat {
+  // TODO(gang.wu): define arrow ipc version and other properties
+}
+
+message FileFormat {
+  FileFormatType type = 1;
+  oneof format {
+    TextFileFormat textFile = 2;
+    ParquetFileFormat parquet_file = 3;
+    OrcFileFormat orc_file = 4;
+    CsvFileFormat csv_file = 5;
+    HiveResultFileFormat hive_result_file = 6;
+    AvroFileFormat avro_file = 7;
+    ArrowFileFormat arrow_file = 8;
+  }
+}
+
+message FileDataSourceInfo {
+  FileSystemType fileSystemType = 1;
+  string path = 2;
+  FileFormat format = 3;
+}
+
+message DataSourceInfo {
+  oneof dataSourceInfo {
+    FileDataSourceInfo file = 1;
+  }
+  map<string, string> options = 2;
+  string location = 3;
+}
+
+message DataSource {
+  repeated DataSourceInfo data_source_infos = 17;
+  uint32 default_data_source_id = 18;
+}
+
+message MVSource {
+  // TODO(chendong): engine use identifier for parameter, while store table id in meta later
+  ObjectIdentifier table_identifier = 1;
+
+  // the source table's snapshot version by which the MV is created
+  // used for checking expiration of MV
+  int64 snapshot = 2;
+}
+
+message RefreshOption {
+  enum Type {
+    ON_DEMAND = 0;
+    ON_COMMIT = 1;
+    ON_SCHEDULE = 2;
+  }
+  Type type = 1;
+  int64 start_time = 2;
+  int64 interval_in_minute = 3;
+}
+
+message MVExtension {
+  string mv_plan = 1;
+  repeated MVSource mv_source_tables = 2;
+  RefreshOption refresh_option = 3;
+  optional int64 mv_snapshot_id = 4;
+}
+
+message View {
+  string view_expanded_text = 1;
+  string view_original_text = 2;
+
+  MVExtension mv_extension = 5;
+}

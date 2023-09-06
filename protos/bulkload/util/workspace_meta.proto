@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+package util;
+option go_package = "github.com/clickzetta/goclickzetta/protos/bulkload/util";
+
+import 'util/object_identifier.proto';
+
+message Workspace {
+  // oss://{bucket}/{inst_ID}/workspaces/{wsName}_{wsId}/
+  // support multiple location, choose one of them when creating table/schema
+  string location = 1; // default location
+  repeated string optional_locations = 2;
+
+  oneof connection {
+    ObjectIdentifier share = 10;
+  }
+}
