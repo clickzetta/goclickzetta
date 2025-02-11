@@ -1,0 +1,27 @@
+syntax = "proto3";
+
+package util;
+option go_package = "github.com/clickzetta/goclickzetta/protos/bulkload/util";
+
+enum ConnectionType {
+  CLOUD_FUNCTION = 0;
+  LAKEHOUSE = 1;
+  KAFKA = 2;
+  HIVE = 3;
+  CLICKHOUSE = 4;
+  MYSQL = 5;
+  POSTGRE = 6;
+  SQLSERVER = 7;
+  OSS_CONNECTION = 8;
+}
+
+enum ConnectionCategory {
+  DATA_CONNECTION = 0;
+  API_CONNECTION = 1;
+}
+
+message Connection {
+  ConnectionType connection_type = 1;
+  ConnectionCategory connection_category = 2;
+  bool enabled = 3;
+}

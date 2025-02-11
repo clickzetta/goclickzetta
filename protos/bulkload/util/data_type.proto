@@ -1,0 +1,126 @@
+syntax = "proto3";
+
+package util;
+option go_package = "github.com/clickzetta/goclickzetta/protos/bulkload/util";
+
+enum DataTypeCategory {
+  NONE = 0;
+
+  INT8 = 1;
+  INT16 = 2;
+  INT32 = 3;
+  INT64 = 4;
+
+  FLOAT32 = 5;
+  FLOAT64 = 6;
+
+  DECIMAL = 7;
+
+  BOOLEAN = 8;
+
+  CHAR = 9;
+  VARCHAR = 10;
+
+  STRING = 11;
+  BINARY = 12;
+
+  DATE = 13;
+  TIMESTAMP_LTZ = 14;
+
+  INTERVAL_YEAR_MONTH = 15;
+  INTERVAL_DAY_TIME = 16;
+
+  BITMAP = 50;
+
+  ARRAY = 100;
+  MAP = 101;
+  STRUCT = 102;
+  FUNCTION_TYPE = 103;
+  VOID = 200;
+}
+
+message CharTypeInfo {
+  uint64 length = 1;
+}
+
+message VarCharTypeInfo {
+  uint64 length = 1;
+}
+
+message DecimalTypeInfo {
+  uint64 precision = 1;
+  uint64 scale = 2;
+}
+
+enum IntervalUnit {
+  NONE_INTERVAL_UNIT = 0;
+  YEAR = 1;
+  MONTH = 2;
+  DAY = 3;
+  HOUR = 4;
+  MINUTE = 5;
+  SECOND = 6;
+}
+
+enum TimestampUnit {
+   SECONDS = 0;
+   MILLISECONDS = 3;
+   MICROSECONDS = 6;
+   NANOSECONDS = 9;
+}
+
+message IntervalDayTimeInfo {
+  IntervalUnit from = 1;
+  IntervalUnit to = 2;
+  TimestampUnit precision = 3;
+}
+
+message IntervalYearMonthInfo {
+  IntervalUnit from = 1;
+  IntervalUnit to = 2;
+}
+
+message ArrayTypeInfo {
+  DataType elementType = 1;
+}
+
+message MapTypeInfo {
+  DataType keyType = 1;
+  DataType valueType = 2;
+}
+
+message StructTypeInfo {
+  message Field {
+    string name = 1;
+    DataType type = 2;
+  }
+  repeated Field fields = 1;
+}
+
+message FunctionTypeInfo {
+  repeated DataType args = 1;
+  DataType return_type = 2;
+}
+
+message TimestampInfo {
+  TimestampUnit tsUnit = 1;
+}
+
+message DataType {
+  DataTypeCategory category = 1;
+  bool nullable = 2;
+  uint32 field_id = 11;
+
+  oneof info {
+    CharTypeInfo charTypeInfo = 3;
+    VarCharTypeInfo varCharTypeInfo = 4;
+    DecimalTypeInfo decimalTypeInfo = 5;
+    ArrayTypeInfo arrayTypeInfo = 6;
+    MapTypeInfo mapTypeInfo = 7;
+    StructTypeInfo structTypeInfo = 8;
+    IntervalDayTimeInfo interval_day_time_info = 9;
+    IntervalYearMonthInfo interval_year_month_info = 10;
+    TimestampInfo timestamp_info = 12;
+    FunctionTypeInfo function_info = 13;
+  }
+}

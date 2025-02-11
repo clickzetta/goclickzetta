@@ -1,0 +1,710 @@
+syntax = "proto3";
+
+package util;
+option go_package = "github.com/clickzetta/goclickzetta/protos/bulkload/util";
+
+import "util/table_meta.proto";
+import "util/table_common.proto";
+import "util/data_type.proto";
+import "util/expression.proto";
+import "util/file_format_type.proto";
+import "util/file_meta_data.proto";
+import "util/input_split.proto";
+import "util/file_system.proto";
+import "util/virtual_value_info.proto";
+
+message ColumnMapping {
+  uint64 outputId = 1;
+  uint64 inputId = 2;
+}
+
+message Operator {
+  string id = 1;
+  repeated string inputIds = 2;
+  DataType schema = 3;
+  repeated ColumnMapping columnMappings = 4;
+  uint64 signature = 5;
+  oneof op {
+    TableScan table_scan = 10;
+    TableSink table_sink = 11;
+    Calc calc = 12;
+    MergeSort merge_sort = 13;
+    ShuffleWrite shuffle_write = 14;
+    ShuffleRead shuffle_read = 15;
+    Values values = 16;
+    HashAggregate hash_agg = 17;
+    SortedAggregate sorted_agg = 18;
+    SortMergeJoin merge_join = 19;
+    HashJoin hash_join = 20;
+    LocalSort local_sort = 21;
+    UnionAll union_all = 22;
+    Buffer buffer = 23;
+    Window window = 24;
+    Expand expand = 25;
+    LateralView lateral_view = 26;
+    Grouping grouping = 27;
+
+    LogicalJoin join = 50;
+    LogicalAggregate aggregate = 51;
+    LogicalCalc logical_calc = 52;
+    LogicalSort logical_sort = 53;
+    SetOperator set_operator = 54;
+    AggregatePhase agg_phase = 55;
+    Spool spool = 56;
+    PartialWindowFilter partial_window_filter = 57;
+    TreeJoin tree_join = 58;
+    TreeJoinLeaf tree_join_leaf = 59;
+    LocalExchange local_exchange = 60;
+  }
+}
+
+enum AggStage {
+  DUPLICATE = 0;
+  PARTIAL1 = 1;
+  PARTIAL2 = 2;
+  FINAL = 3;
+  COMPLETE = 4;
+}
+
+message AggregateCall {
+  ScalarExpression function = 1;
+  bool distinct = 2;
+  AggStage stage = 3;
+  repeated OrderByDesc orders = 4;
+  Reference filter = 5;
+  repeated uint64 output_fields = 6;
+
+  DataType initial_Type = 10;          // The initial data type of an aggregate function
+  DataType partial_Type = 11;          // The partial data type of an aggregate function
+  DataType output_Type = 12;           // The output data type of an aggregate function
+}
+
+message LogicalAggregate {
+  repeated Reference keys = 1;
+  repeated AggregateCall aggregate_calls = 2;
+}
+
+message HashAggregate {
+  LogicalAggregate aggregate = 1;
+  AggStage stage = 2;
+}
+
+message SortedAggregate {
+  LogicalAggregate aggregate = 1;
+  AggStage stage = 2;
+  repeated OrderByDesc orders = 3;
+}
+
+message AggregatePhase {
+  LogicalAggregate aggregate = 1;
+  AggStage stage = 2;
+}
+
+enum JoinType {
+  INNER = 0;
+  LEFT = 1;
+  RIGHT = 2;
+  FULL = 3;
+  LEFT_SEMI = 4;
+  LEFT_ANTI = 5;
+}
+
+enum DynamicFilterType {
+  DF_NONE = 0;
+  DF_GLOBAL = 1;
+  DF_BROADCAST = 2;
+  DF_SHUFFLED = 3;
+}
+
+message DynamicFilterInfo {
+  DynamicFilterType type = 1;
+  bool consumer = 2;
+  double selectivity = 3;
+  uint32 probe = 4;
+  bool partition_filter = 5;
+  uint32 table_scan_parents = 6;
+}
+
+message JoinHintInfo {
+  int32 hintBroadcastSide = 1;
+}
+
+message TreeJoin {
+  repeated Operator root_operators = 1;
+}
+
+message TreeJoinLeaf {
+  int32 input_index = 1;
+  bool hint_broadcast = 2;
+}
+
+message LogicalJoin {
+  JoinType type = 1;
+  ScalarExpression condition = 2;
+  repeated uint64 input_references = 3;
+  DynamicFilterInfo dynamic_filter = 4;
+  JoinHintInfo hintInfo = 5;
+}
+
+message SortMergeJoin {
+  LogicalJoin join = 1;
+  repeated OrderByDesc lhs_orders = 2;
+  repeated OrderByDesc rhs_orders = 3;
+}
+
+message HashJoin {
+  LogicalJoin join = 1;
+  string probe_operator_id = 2;
+  bool broadcast = 3;
+}
+
+message Timing {
+  uint64 cpu_nanos = 1;
+  uint64 wall_nanos = 2;
+}
+
+message OperatorStats {
+  string operator_id = 1;
+  uint64 row_count = 2;
+  Timing timing = 3;
+  oneof op_stats {
+    TableScanStats table_scan_stats = 4;
+    TableSinkStats table_sink_stats = 5;
+    CalcStats calc_stats = 6;
+    HashJoinStats hash_join_stats = 7;
+    MergeJoinStats merge_join_stats = 8;
+    HashAggregateStats hash_aggregate_stats = 9;
+    MergeAggregateStats merge_aggregate_stats = 10;
+    LocalSortStats local_sort_stats = 11;
+    MergeSortStats merge_sort_stats = 12;
+    ValuesStats values_stats = 13;
+    ExchangeSinkStats exchange_sink_stats = 14;
+    ExchangeSourceStats exchange_source_stats = 15;
+    UnionAllStats union_all_stats = 16;
+    BufferStats buffer_stats = 17;
+    WindowStats window_stats = 18;
+    ExpandStats expand_stats = 19;
+    LateralViewStats lateral_view_stats = 20;
+    PartialWindowStats partial_window_stats = 21;
+  }
+  Timing init_timing = 100;
+  uint64 batch_count = 101;
+  uint64 peak_memory = 102;
+  uint64 start_time_nanos = 103;
+  uint64 end_time_nanos = 104;
+  uint64 batch_signature = 105;
+  string exec_node_id = 106;
+  uint64 pipeline_id = 107;
+  uint64 driver_sequence = 108;
+  uint64 block_timing_nanos = 109;
+  bytes extra_stats_binary = 254;
+  // deperated
+  string extra_stats = 255;
+}
+
+message OrderByDesc {
+  Reference reference = 1;
+  Order order = 2;
+}
+
+message MergeSort {
+  repeated OrderByDesc orders = 1;
+  repeated uint64 input_references = 2;
+}
+
+message UnionAll {
+  repeated uint64 input_references = 1;
+}
+
+message Buffer {
+  bool shared = 1;
+}
+
+message PartialWindowFilter {
+  ScalarExpression function = 1;
+  WindowSpec spec = 2;
+  uint64 limit = 3;
+}
+
+message Window {
+  repeated WindowGroup groups = 1;
+  repeated uint64 input_references = 2;
+}
+
+message WindowGroup {
+  repeated WindowCall functions = 1;
+  WindowSpec spec = 2;
+}
+
+message WindowCall {
+  ScalarExpression function = 1;
+  bool distinct = 2;
+  DataType partial_type = 3;
+}
+
+message WindowSpec {
+  repeated Reference keys = 1;
+  repeated OrderByDesc orders = 2;
+
+  enum BoundaryType {
+    ROWS = 0;
+    RANGE = 1;
+    GROUP = 2;
+  }
+
+  BoundaryType boundary_type = 3;
+  WindowBoundary lower_bound = 4;
+  WindowBoundary upper_bound = 5;
+}
+
+message WindowBoundary {
+  optional bool preceding = 1;
+  Constant offset = 2;
+}
+
+message LateralView {
+  repeated TableFunctionCall functions = 1;
+  repeated uint64 input_references = 2;
+}
+
+message TableFunctionCall {
+  ScalarExpression function = 1;
+  bool outer = 2;
+  repeated uint64 used_fields = 3;
+}
+
+message Spool {
+  uint64 spool_id = 1;
+}
+
+enum LazyEval {
+  NOT_LAZY = 0;
+  LAZY_IN_CONDITION = 1;
+  ALWAYS_LAZY = 2;
+}
+
+message Calc {
+  repeated ScalarExpression expressions = 1;
+  oneof optional_filter {
+    bool no_filter = 2;
+    uint64 filter = 3;
+  }
+  repeated uint64 projects = 4;
+  repeated LazyEval lazy = 5;
+  optional double partial_window_filter_selectivity = 6;
+}
+
+message LogicalCalc {
+  ScalarExpression condition = 1;
+  repeated ScalarExpression projects = 2;
+  optional double partial_window_filter_selectivity = 3;
+}
+
+message Expand {
+  repeated ScalarExpression expressions = 1;
+}
+
+message GroupingKeySet {
+  repeated Reference keys = 1;
+}
+
+message Grouping {
+  repeated Reference keys = 1;
+  repeated GroupingKeySet keySets = 2;
+  repeated AggregateCall aggregate_calls = 3;
+  uint64 grouping_id_start_from = 4;
+  optional uint64 grouping_id_col_offset = 5;
+}
+
+message CalcStats {}
+
+message HashTableStats {
+  uint64 num_buckets = 1;
+  uint64 num_keys = 2;
+  uint64 num_resize = 3;
+  uint64 num_accesses = 4;
+  uint64 num_collisions = 5;
+  uint64 used_memory = 6;
+}
+
+message HashJoinStats {
+  Timing build_timing = 1;
+  Timing finish_build_timing = 2;
+  Timing probe_timing = 3;
+  Timing post_probe_timing = 4;
+  HashTableStats ht_stats = 5;
+  uint64 num_build_rows = 6;
+  uint64 num_distinct_build_rows = 7;
+  uint64 max_equal_build_rows = 8;
+  SpillStats build_spill_stats = 9;
+  SpillStats probe_spill_stats = 10;
+  Timing probe_find_ht_timing = 11;
+  Timing probe_output_timing = 12;
+  Timing probe_eval_conjunct_timing = 13;
+  Timing probe_output_conjunct_timing = 14;
+}
+
+message MergeJoinStats {}
+
+message HashAggregateStats {
+  Timing assign_states_timing = 1;
+  Timing update_states_timing = 2;
+  Timing output_timing = 3;
+  HashTableStats ht_stats = 4;
+  uint64 states_used_memory = 5;
+  uint64 pass_through_rows = 6;
+  SpillStats input_spill_stats = 7;
+  SpillStats aggregated_spill_stats = 8;
+}
+
+message MergeAggregateStats {
+  Timing assign_states_timing = 1;
+  Timing update_states_timing = 2;
+  Timing output_timing = 3;
+}
+
+message LocalSortStats {
+  SpillStats spill_stats = 1;
+  Timing generate_run_timing = 2;
+  Timing merge_run_timing = 3;
+  Timing init_merge_timing = 4;
+
+  // included in generate_run_timing
+  Timing accumulate_block_timing = 5;
+  Timing sort_key_timing = 6;
+  Timing permute_payload_timing = 7;
+  Timing spill_run_timing = 8;
+}
+message MergeSortStats {}
+message UnionAllStats {}
+message ValuesStats {}
+message BufferStats {
+  SpillStats spill_stats = 1;
+}
+message WindowStats {}
+message PartialWindowStats {}
+message ExpandStats {}
+message LateralViewStats {}
+
+message ExchangeSinkStats {
+  uint64 sent_byte_count = 1;
+  uint64 compress_input_byte_count = 2;
+
+  Timing serialize_write_timing = 3;
+  Timing serialize_flush_timing = 4;
+  Timing compress_timing = 5;
+  Timing acquire_buffer_timing = 6;
+  Timing submit_buffer_timing = 7;
+  Timing close_timing = 8;
+  Timing submit_buffer_async_timing = 9;
+}
+
+message ExchangeSourceStats {
+  uint64 received_byte_count = 1;
+  uint64 decompress_output_byte_count = 2;
+
+  Timing deserialize_timing = 3;
+  Timing decompress_timing = 4;
+  Timing read_buffer_timing = 5;
+  Timing sort_timing = 6;
+
+  SpillStats sorter_spill_stats = 7;
+}
+
+message Table {
+  repeated string path = 1;
+  TableMeta table_meta = 2;
+  int64 instance_id = 3;
+}
+
+message Values {
+  uint32 row_count = 1;
+  uint32 col_count = 2;
+  repeated ScalarExpression data = 3;
+  bool broadcast = 4;
+}
+
+message SortKeyDesc {
+  uint32 id = 1;
+  Order order = 2;
+}
+
+message TableScan {
+  Table table = 1;
+  int32 data_source_info_id = 2;
+  repeated uint64 cols = 3;
+  ScalarExpression filter = 4;
+  ScalarExpression ensuredFilter = 5;
+  map<string, string> props = 6;
+  bool align = 7;
+  uint64 alignDop = 8;
+  repeated SortKeyDesc orders = 9;
+  repeated uint32 range_keys = 10;
+  uint32 range_distribution_id = 11;
+  IncrementalTableProperty incremental_table_property = 12;
+  ScalarExpression filter4Meta = 13;
+}
+
+message TableScanStats {
+  DataInputStats input_stats = 1;
+}
+
+message IncrementalTableProperty {
+  int64 from = 1;
+  int64 to = 2;
+  bool consolidate = 3;   // no longer used
+  int64 fromMetaVersion = 4;
+  int64 toMetaVersion = 5;
+  int64 rowCount = 6;
+  int64 baseRowCount = 7;
+}
+
+// The shuffle type. Wrapping a message to avoid enum name conflict
+message ShuffleType {
+  enum Type {
+    HASH = 0;
+    RANGE = 1;
+    BROADCAST = 2;
+    SINGLE = 3;
+    RANDOM = 4;
+    PAIR_WIZE = 5;
+    ADAPTIVE_HASH = 6;
+    ADAPTIVE_RANGE = 7;
+    ROUND_ROBIN = 8;
+  }
+  Type type = 1;
+}
+
+message TableSink {
+  Table table = 1;
+  bool overwrite = 2;
+  int32 data_source_info_id = 3;
+  repeated Reference keys = 4;
+  uint32 flags = 5;
+  repeated Reference part_sort_keys = 6;
+  repeated uint64 input_fields = 7;
+  repeated Reference file_slice_keys = 8;
+  bool static_partition = 9;
+  VirtualValueInfo part_values = 10;
+  bool nop = 11;
+}
+
+message ShuffleWrite {
+  ShuffleType shuffleType = 1;
+  repeated Reference keys = 2;
+  repeated OrderByDesc orders = 3;
+  uint32 limit = 4;  // 0 means no limit
+  uint32 function_version = 5;
+  HashBucketType bucket_type = 6;
+  uint32 range_distribution_id = 7;
+}
+
+message ShuffleRead {
+  repeated OrderByDesc orders = 1;
+  uint32 limit = 2;   // 0 means no limit
+  uint32 offset = 3;
+  ShuffleType shuffleType = 4;
+  bool multi_accessed = 5;
+  bool pre_start = 6;
+  bool merge_sort = 7;
+}
+
+message LocalExchange {
+  ShuffleType shuffleType = 1;
+  repeated Reference keys = 2;
+  repeated OrderByDesc orders = 3;
+  uint32 limit = 4;   // 0 means no limit
+  uint32 offset = 5;
+  uint32 function_version = 6;
+}
+
+message LocalSort {
+  repeated OrderByDesc orders = 1;
+  uint64 limit = 2;
+  uint64 offset = 3;
+}
+
+message LogicalSort {
+  repeated Reference keys = 1;
+  repeated OrderByDesc orders = 2;
+  ScalarExpression limit = 3;
+  ScalarExpression offset = 4;
+  bool global = 5;
+}
+
+enum SetOpType {
+  UNION = 0;
+  INTERSECT = 1;
+  EXCEPT = 2;
+}
+
+message SetOperator {
+  SetOpType type = 1;
+  bool all = 2;
+  repeated uint64 input_references = 3;
+}
+
+message DataInputStats {
+  uint64 raw_input_byte_count = 1;
+  uint64 row_count = 2;
+  oneof input_stats {
+    FileRangesInputStats file_input_stats = 3;
+    FileInputStats file_format_stats = 4;
+  }
+  uint64 time_elapsed_us = 5; // including decoding/decompression/io...
+}
+
+message FileRangesInputStats {
+  repeated DataInputStats file_input_stats = 1;
+}
+
+message FileInputStats {
+  FileFormatType format_type = 1;
+  FileRange range = 2;
+  oneof file_format_input_stats {
+    TextInputStats text_input_stats = 3;
+    ParquetInputStats parquet_input_stats = 4;
+    MemoryTableInputStats memory_input_stats = 5;
+    OrcInputStats orc_input_stats = 8;
+    DummyInputStats dummy_input_stats = 9;
+    CSVInputStats csv_input_stats = 10;
+    AvroInputStats avro_input_stats = 11;
+    ArrowInputStats arrow_input_stats = 12;
+  }
+  FileIOInputStats io_stats = 6;
+
+  repeated DataInputStats delta_file_stats = 7;
+}
+
+message DeltaFileInputStats {
+  FileInputStats baseFileStats = 1;
+}
+
+message FileIOInputStats {
+  uint64 read_count = 1; // io request count
+  uint64 read_bytes = 2; // io bytes
+  uint64 time_elapsed_us = 3; // io stream time, including benefit of prefetch
+  PrefetchStats prefetch_stats = 4;
+  FileInputStreamStats input_stats = 5;
+}
+
+message FileIOOutputStats {
+  uint64 time_elapsed_us = 1; // io stream time, means the time blocking on io(SYNC).
+}
+
+message PrefetchStats {
+  string driver_type = 8;
+  uint64 read_count = 1; // io request from outside
+  uint64 read_bytes = 2; // io bytes from prefetch cache
+  uint64 read_hit_cache = 3; // prefetch cache hit count
+  uint64 read_time_elapsed_us = 4; // total io request cost(SYNC)
+  uint64 io_count = 5; // merged io count in prefetch thread/fiber
+  uint64 io_bytes = 6; // merged io bytes in prefetch thread/fiber
+  uint64 io_time_elapsed_us = 7; // merged io cost(ASYNC)
+}
+
+message FileInputStreamStats {
+  FileSystemType file_system_type = 1;
+  oneof file_input_stream_stats {
+    CacheFileInputStreamStats cache_file_input_stream_stats = 4;
+  }
+}
+
+message CacheFileInputStreamStats {
+  bool cache_hit = 1;
+  string short_circuit_stream_type = 2;
+  bool segment_mode = 3;
+  uint64 non_read_time_elapsed_us = 4;
+  uint64 rpc_read_bytes = 5;
+  uint64 rpc_read_time_elapsed_us = 6;
+  uint64 direct_read_bytes = 7;
+  uint64 direct_read_time_elapsed_us = 8;
+}
+
+message TextInputStats {
+  uint64 missing_field_warned_count = 1;
+  uint64 extra_field_warned_count = 2;
+}
+
+message MemoryTableInputStats {
+  uint64 batch_count = 1;
+}
+
+message ParquetInputStats {
+  uint64 batch_count = 1;
+  uint64 decompression_latency_ns = 2;
+  uint64 levels_decoding_latency_ns = 3;
+  uint64 data_loading_latency_ns = 4;
+  uint64 ppd_inclusive_latency_ns = 5;
+  uint64 reader_inclusive_latency_ns = 6;
+  uint64 requested_row_count = 7;
+  uint64 read_row_count = 8;
+}
+
+message OrcInputStats {
+  uint64 batch_count = 1;
+}
+
+message CSVInputStats {};
+
+message DummyInputStats {
+  uint64 batch_count = 1;
+}
+
+message AvroInputStats {};
+
+message ArrowInputStats {};
+
+message DataOutputStats {
+  uint64 raw_output_byte_count = 1;
+  uint64 row_count = 2;
+  oneof outputStats {
+    FileOutputStats file_output_stats = 3;
+    MultipleFileOutputStats multiple_file_output_stats = 4;
+  }
+}
+
+message FileOutputStats {
+  FileMetaData file_meta_data = 1;
+
+  oneof file_format_output_stats {
+    TextOutputStats text_output_stats = 2;
+    ParquetOutputStats parquet_output_stats = 3;
+    OrcOutputStats orc_output_stats = 6;
+    AvroOutputStats avro_output_stats = 7;
+    ArrowOutputStats arrow_output_stats = 8;
+  }
+
+  FileIOOutputStats io_stats = 4;
+  repeated FileMetaData delete_file_metas = 5;
+}
+
+message MultipleFileOutputStats {
+  repeated DataOutputStats file_output_stats = 1;
+}
+
+message TextOutputStats {
+}
+
+message ParquetOutputStats {
+  uint64 arrow_casting_time = 1;
+  uint64 page_compress_time = 2;
+  uint64 encoding_time = 3;
+}
+
+message OrcOutputStats {}
+
+message AvroOutputStats {}
+
+message ArrowOutputStats {}
+
+message TableSinkStats {
+  DataOutputStats output_stats = 1;
+}
+
+message SpillStats {
+  uint64 compressed_size = 1;
+  uint64 raw_size = 2;
+  uint64 spill_count = 3;
+  uint64 row_count = 4;
+}

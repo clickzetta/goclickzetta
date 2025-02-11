@@ -1,0 +1,102 @@
+syntax = "proto3";
+
+import "util/data_type.proto";
+import "util/property.proto";
+
+package util;
+option go_package = "github.com/clickzetta/goclickzetta/protos/bulkload/util";
+
+message IntervalDayTime {
+  int64 seconds = 1;
+  int32 nanos = 2;
+}
+
+message ArrayValue {
+  repeated Constant elements = 1;
+}
+
+message MapValue {
+  repeated Constant keys = 1;
+  repeated Constant values = 2;
+}
+
+message StructValue {
+  repeated Constant fields = 1;
+}
+
+message Constant {
+  oneof value {
+    bool null = 1;
+    int32 tinyint = 2;
+    int32 smallInt = 3;
+    int32 int = 4;
+    int64 bigint = 5;
+
+    float float = 6;
+    double double = 7;
+
+    string decimal = 8;
+
+    bool boolean = 9;
+
+    string char = 10;
+    string varchar = 11;
+    string string = 12;
+    bytes binary = 13;
+
+    int32 date = 14;
+    int64 timestamp = 15;
+    int64 IntervalYearMonth = 16;
+    IntervalDayTime IntervalDayTime = 17;
+
+    ArrayValue array = 100;
+    MapValue map = 101;
+    StructValue struct = 102;
+  }
+}
+
+enum ReferenceType {
+  LOGICAL_FIELD = 0;
+  REF_LOCAL = 1;
+  PHYSICAL_FIELD = 2;
+  REF_VARIABLE = 3;
+}
+
+message Reference {
+  uint64 id = 1;
+  bool local = 2;
+  string from = 3;
+  string name = 4;
+  ReferenceType ref_type = 5;
+}
+
+message ScalarFunction {
+  string from = 1;
+  string name = 2;
+  bool builtIn = 3;
+  repeated ScalarExpression arguments = 4;
+  Properties properties = 5;
+  string execDesc = 6;
+  Properties functionProperties = 7;
+}
+
+message VariableDef {
+  DataType type = 1;
+  uint64 id = 2;
+}
+
+message LambdaFunction {
+  repeated VariableDef params = 1;
+  ScalarExpression impl = 2;
+}
+
+message ScalarExpression {
+  DataType type = 1;
+  oneof value {
+    Constant constant = 2;
+    Reference reference = 3;
+    ScalarFunction function = 5;
+    LambdaFunction lambda = 6;
+  }
+}
+

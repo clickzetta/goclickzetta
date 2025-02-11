@@ -1,0 +1,35 @@
+syntax = "proto3";
+
+package util;
+option go_package = "github.com/clickzetta/goclickzetta/protos/bulkload/util";
+
+message FunctionResource {
+  string type = 1;
+  string uri = 2;
+}
+
+message FunctionResourceList {
+  repeated FunctionResource resources = 1;
+}
+
+message RemoteEntrypoint {
+  string internal_url = 1;
+  string external_url = 2;
+  string protocol = 3;
+  string vendor_type = 4;
+  message VendorInfo {
+    string service = 1;
+    string function = 2;
+  }
+  VendorInfo vendor_info = 5;
+}
+
+message Function {
+  string category = 1;
+  string exec_type = 2;
+  string signature = 3;
+  string handler = 4;
+  int64 connection_id = 5;
+  FunctionResourceList resources = 6;
+  RemoteEntrypoint remote_entrypoint = 7;
+}

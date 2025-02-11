@@ -1,0 +1,20 @@
+syntax = "proto3";
+
+package util;
+option go_package = "github.com/clickzetta/goclickzetta/protos/bulkload/util";
+
+enum RoleType {
+  RT_SYSTEM = 0;
+  RT_CUSTOMIZE = 1;
+}
+
+enum RoleLevel {
+  RL_SYSTEM = 0;
+  RL_WORKSPACE = 1;
+}
+
+message Role {
+  string alias = 1;
+  RoleType type = 2;
+  RoleLevel level = 3;
+}

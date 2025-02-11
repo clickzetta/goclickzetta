@@ -1,0 +1,46 @@
+syntax = "proto3";
+package util;
+option go_package = "github.com/clickzetta/goclickzetta/protos/bulkload/util";
+
+import "rm/virtual_cluster.proto";
+
+message AnalyticsProperties {
+  optional int32 min_replicas = 1;
+  optional int32 max_replicas = 2;
+  optional int32 max_concurrency_per_replica = 3;
+  optional rm.ScalePolicy scale_policy = 4;
+  optional int32 cur_replicas = 5;
+  optional string preload_tables = 6;
+}
+
+message GeneralProperties {
+  optional rm.VClusterSize cluster_max_size = 1;
+}
+
+message JobInfo {
+  optional int32 jobs_running = 1;
+  optional int32 jobs_in_queue = 2;
+}
+
+message VirtualClusterMeta {
+  rm.VClusterType cluster_type = 1;
+  optional rm.VClusterSize cluster_size = 2;
+  oneof resource_oneof {
+    AnalyticsProperties analytics_properties = 3;
+    GeneralProperties general_properties = 4;
+  }
+  optional int32 auto_stop_latency_sec = 5;
+  optional bool auto_start_enabled = 6;
+  map<string, string> tag = 7;
+  optional int32 query_process_time_limit_sec = 9;
+  optional rm.VirtualClusterState state = 10;
+  optional rm.VirtualClusterState pre_state = 11;
+  optional string error_msg = 12;
+  // job info is not stored in meta
+  optional JobInfo job_info = 13;
+  optional int64 workspace_id = 14;
+  optional int64 vc_id = 15;
+
+  optional string state_info = 16;
+  optional string version = 17;
+}

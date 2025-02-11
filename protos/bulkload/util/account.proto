@@ -1,0 +1,44 @@
+syntax = "proto3";
+
+package util;
+option go_package = "github.com/clickzetta/goclickzetta/protos/bulkload/util";
+
+import 'util/object_identifier.proto';
+
+message PolicyStatement {
+  string Effect = 1;
+  repeated string Principal = 2;
+  repeated string Action = 3;
+  repeated string Resource = 4;
+}
+
+message Policy {
+  string Version = 1;
+  repeated PolicyStatement Statement = 2;
+}
+
+message Account {
+  int64 account_id = 1;
+  string user_name = 2;
+  int64 user_id = 3;
+  optional PrincipalType type = 4 ;
+  optional Policy policy = 5;
+}
+
+message Instance {
+  string account_name = 4;
+  int64 account_id = 1;
+  int64 instance_id = 2;
+  string instance_name = 3;
+}
+
+message UserIdentifier {
+  ObjectIdentifier identifier = 1;
+  int64 user_id = 2;
+}
+
+message User {
+  optional int64 user_id = 1;
+  string default_vc = 2;
+  string default_schema = 3;
+}

@@ -1,0 +1,13 @@
+syntax = "proto3";
+package rm;
+option go_package = "github.com/clickzetta/goclickzetta/protos/bulkload/rm";
+
+message VirtualClusterSizeSpec {
+  int64 id = 1;
+  string name = 2;
+  optional string alias_1 = 3;
+  optional string alias_2 = 4;
+  optional string alias_3 = 5;
+  double cpu_core = 6;
+  int64 mem_gb = 7;
+}

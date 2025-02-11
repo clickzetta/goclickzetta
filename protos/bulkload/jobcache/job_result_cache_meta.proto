@@ -1,0 +1,13 @@
+syntax = "proto3";
+package jobcache;
+option go_package = "github.com/clickzetta/goclickzetta/protos/bulkload/jobcache";
+
+
+message JobResultCacheMeta {
+  optional uint64 instance_id = 1;
+  optional uint64 workspace_id = 2;
+  optional string job_signature = 3;
+  optional string preprocessed_plan = 4;
+  optional string result_files = 5;
+  optional uint64 start_time_ms = 6;
+}

@@ -1,0 +1,146 @@
+syntax = "proto3";
+
+package util;
+option go_package = "github.com/clickzetta/goclickzetta/protos/bulkload/util";
+
+import "util/virtual_value_info.proto";
+import "util/statistics.proto";
+
+
+
+enum InputSplitType {
+  FILE_RANGE = 0;
+  ROW_RANGE = 1;
+}
+
+message InputSplit {
+  InputSplitType type = 1;
+  string operatorId = 2;
+  oneof split {
+    FileRangesInputSplit fileRanges = 3;
+    FileRowRangeInputSplit fileRowRange = 4;
+  }
+}
+
+// Read mode
+enum FileRangeType {
+  // Default value, its meaning varies on the read mode:
+  // 1) Normal mode: the file should be read as usual.
+  // 2) Incremental mode: the file is an existing file and is only applied to fetch old values.
+  NORMAL_FILE = 0;
+  // Incremental mode only: the file is added and read all as new values.
+  ADDED_FILE = 1;
+  // Incremental mode only: the file is deleted and read all as old values.
+  DELETED_FILE = 2;
+}
+
+message FileFieldStats {
+  repeated FieldRange field_ranges = 1;
+};
+
+message FileRange {
+  string path = 1;
+  int64 offset = 2;
+  int64 size = 3;
+  VirtualValueInfo value_info = 4;
+  repeated FileRange delta_files = 5;
+  FileRangeType type = 6;
+  FileFieldStats field_stats = 7;
+}
+
+message FileRangesInputSplit {
+  repeated FileRange ranges = 2;
+  uint32 bucket_count = 3;
+  uint32 bucket_id = 4;
+}
+
+message FileRowRangeInputSplit {
+  string path = 1;
+  int64 start_row = 2; // inclusive
+  int64 end_row = 3;   // exclusive
+}
+
+message RangeFile {
+  optional string path = 1;
+  optional int64 recordCnt = 2;
+  optional int64 fileSize = 3;
+  optional string location = 4;
+}
+
+message RangeLiteral {
+  oneof value {
+    int32 intV = 1;
+    int64 longV = 2;
+    string stringV = 3;
+  }
+}
+
+message RangePartition {
+  optional int32 rangeId = 1;
+  repeated RangeFile rangeFiles = 2;
+  repeated RangeLiteral lower = 3;
+  repeated RangeLiteral upper = 4;
+}
+
+message OutputSplitType {
+  enum Type {
+    FILE = 0;
+  }
+}
+
+message OutputSplit {
+  OutputSplitType.Type type = 1;
+  string operatorId = 2;
+  oneof split {
+    FileOutputSplit file = 4;
+  }
+}
+
+message FileOutputSplit {
+  string path = 1;
+}
+
+message FileSplitMeta {
+  string split_file = 3;
+  message Offset {
+    int64 task_id = 1;
+    int64 start_offset = 2;
+    int64 end_offset = 3;
+  }
+  repeated Offset offset = 4;
+}
+
+message EmbeddedSplitMeta {
+  message Pair {
+    int64 task_id = 1;
+    InputSplit split = 2;
+    OutputSplit output_split = 3;
+  }
+  repeated Pair splits = 3;
+}
+
+message SplitMeta {
+  string stage_id = 1;
+  string operator_id = 2;
+  oneof content {
+    FileSplitMeta file = 3;
+    EmbeddedSplitMeta embedded = 4;
+  }
+}
+
+message CompactionSplitFile {
+  string path = 1;
+  int64 offset = 2;
+  int64 size = 3;
+  int64 sliceId = 4;
+  VirtualValueInfo value_info = 5;
+  repeated CompactionSplitFile delta_files = 6;
+}
+
+message CompactionSplit {
+  repeated CompactionSplitFile files = 1;
+}
+
+message CompactionSplits {
+  repeated CompactionSplit splits = 1;
+}

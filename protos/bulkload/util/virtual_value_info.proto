@@ -1,0 +1,39 @@
+syntax = "proto3";
+
+package util;
+option go_package = "github.com/clickzetta/goclickzetta/protos/bulkload/util";
+
+import "util/expression.proto";
+import "util/data_type.proto";
+
+message ConstantField {
+  uint32 field_id = 1;
+  DataType type = 2;
+  Constant value = 3;
+
+  optional string field_name = 10; // only used in commit log
+}
+
+/*
+ * hive support some virtual columns:
+ *  INPUT__FILE__NAME, which is the input file's name for a mapper task.
+ *  BLOCK__OFFSET__INSIDE__FILE, which is the current global file position.
+ *  ROW__OFFSET__INSIDE__BLOCK
+ *  RAW__DATA__SIZE
+ *  ROW__ID
+ *  GROUPING__ID
+ * different systems have different semantics,
+ * It like:
+ *  presto not support virtual columns
+ *  mysql and oracle support virtual columns, it called generated columns
+ *  sql server called computed columns, marked PERSISTED, it will be stored in the table
+ */
+message VirtualColumnValues {
+  repeated ConstantField values = 1;
+  // maybe only contains partial blocks
+  repeated uint32 block_ids = 2;
+}
+
+message VirtualValueInfo {
+    VirtualColumnValues virtual_values = 1;
+}
