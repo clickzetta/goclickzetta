@@ -14,7 +14,7 @@ func TestDriver(t *testing.T) {
 }
 
 func TestOpenWithString(t *testing.T) {
-	dsn := "SD_demo:Asddemo123!@https(api.clickzetta.com)/ecommerce_events_history?virtualCluster=default&workspace=quickStart_WS&instance=6861c888"
+	dsn := "username:passwprd@https(mock.clickzetta.com)/schema?virtualCluster=default&workspace=mock&instance=mock"
 	driver := ClickzettaDriver{}
 	conn, err := driver.Open(dsn)
 	if err != nil {
@@ -31,14 +31,14 @@ func TestOpenWithString(t *testing.T) {
 
 func TestOpen(t *testing.T) {
 	cfg := Config{
-		UserName:       "SD_demo",
-		Password:       "Asddemo123!",
+		UserName:       "username",
+		Password:       "password!",
 		Protocol:       "https",
-		Service:        "api.clickzetta.com",
-		Instance:       "6861c888",
-		Workspace:      "quickStart_WS",
+		Service:        "https://mock.clickzetta.com",
+		Instance:       "mock",
+		Workspace:      "mock",
 		VirtualCluster: "default",
-		Schema:         "ecommerce_events_history",
+		Schema:         "default",
 	}
 	dsnStr := DSN(&cfg)
 	driver := ClickzettaDriver{}
@@ -58,14 +58,14 @@ func TestOpen(t *testing.T) {
 func TestOpenWithConfig(t *testing.T) {
 	ctx := context.TODO()
 	cfg := Config{
-		UserName:       "SD_demo",
-		Password:       "Asddemo123!",
+		UserName:       "username",
+		Password:       "password!",
 		Protocol:       "https",
-		Service:        "https://api.clickzetta.com",
-		Instance:       "6861c888",
-		Workspace:      "quickStart_WS",
+		Service:        "https://mock.clickzetta.com",
+		Instance:       "mock",
+		Workspace:      "mock",
 		VirtualCluster: "default",
-		Schema:         "ecommerce_events_history",
+		Schema:         "default",
 	}
 
 	driver := ClickzettaDriver{}
@@ -84,7 +84,7 @@ func TestOpenWithConfig(t *testing.T) {
 }
 
 func TestSqlOpen(t *testing.T) {
-	db, err := sql.Open("clickzetta", "SD_demo:Asddemo123!@https(api.clickzetta.com)/ecommerce_events_history?virtualCluster=default&workspace=quickStart_WS&instance=6861c888")
+	db, err := sql.Open("clickzetta", "username:passwprd@https(mock.clickzetta.com)/schema?virtualCluster=default&workspace=mock&instance=mock")
 	if err != nil {
 		t.Error(err)
 	}

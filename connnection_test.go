@@ -4,22 +4,23 @@ import (
 	"context"
 	"database/sql/driver"
 	"fmt"
-	"github.com/zeebo/assert"
 	"io"
 	"testing"
+
+	"github.com/zeebo/assert"
 )
 
 func TestBuildConnection(t *testing.T) {
 	ctx := context.TODO()
 	cfg := Config{
-		UserName:       "SD_demo",
-		Password:       "Asddemo123!",
+		UserName:       "username",
+		Password:       "password!",
 		Protocol:       "https",
-		Service:        "https://api.clickzetta.com",
-		Instance:       "6861c888",
-		Workspace:      "quickStart_WS",
+		Service:        "https://mock.clickzetta.com",
+		Instance:       "mock",
+		Workspace:      "mock",
 		VirtualCluster: "default",
-		Schema:         "ecommerce_events_history",
+		Schema:         "default",
 	}
 	conn, err := buildClickzettaConn(ctx, cfg)
 	if err != nil {
@@ -38,14 +39,14 @@ func TestBuildConnection(t *testing.T) {
 func TestConnectionQuery(t *testing.T) {
 	ctx := context.TODO()
 	cfg := Config{
-		UserName:       "SD_demo",
-		Password:       "Asddemo123!",
+		UserName:       "username",
+		Password:       "password!",
 		Protocol:       "https",
-		Service:        "https://api.clickzetta.com",
-		Instance:       "6861c888",
-		Workspace:      "quickStart_WS",
+		Service:        "https://mock.clickzetta.com",
+		Instance:       "mock",
+		Workspace:      "mock",
 		VirtualCluster: "default",
-		Schema:         "ecommerce_events_history",
+		Schema:         "default",
 	}
 	conn, err := buildClickzettaConn(ctx, cfg)
 	if err != nil {
@@ -71,14 +72,14 @@ func TestConnectionQuery(t *testing.T) {
 func TestConnectionExec(t *testing.T) {
 	ctx := context.TODO()
 	cfg := Config{
-		UserName:       "SD_demo",
-		Password:       "Asddemo123!",
+		UserName:       "username",
+		Password:       "password!",
 		Protocol:       "https",
-		Service:        "https://api.clickzetta.com",
-		Instance:       "6861c888",
-		Workspace:      "quickStart_WS",
+		Service:        "https://mock.clickzetta.com",
+		Instance:       "mock",
+		Workspace:      "mock",
 		VirtualCluster: "default",
-		Schema:         "public",
+		Schema:         "default",
 	}
 	conn, err := buildClickzettaConn(ctx, cfg)
 	if err != nil {
@@ -123,14 +124,14 @@ func TestConnectionExec(t *testing.T) {
 func TestConnectionPing(t *testing.T) {
 	ctx := context.TODO()
 	cfg := Config{
-		UserName:       "SD_demo",
-		Password:       "Asddemo123!",
+		UserName:       "username",
+		Password:       "password!",
 		Protocol:       "https",
-		Service:        "https://api.clickzetta.com",
-		Instance:       "6861c888",
-		Workspace:      "quickStart_WS",
+		Service:        "https://mock.clickzetta.com",
+		Instance:       "mock",
+		Workspace:      "mock",
 		VirtualCluster: "default",
-		Schema:         "public",
+		Schema:         "default",
 	}
 	conn, err := buildClickzettaConn(ctx, cfg)
 	if err != nil {

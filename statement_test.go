@@ -3,13 +3,14 @@ package goclickzetta
 import (
 	"database/sql/driver"
 	"fmt"
-	"github.com/zeebo/assert"
 	"io"
 	"testing"
+
+	"github.com/zeebo/assert"
 )
 
 func initConn() *ClickzettaConn {
-	dsn := "SD_demo:Asddemo123!@https(api.clickzetta.com)/ecommerce_events_history?virtualCluster=default&workspace=quickStart_WS&instance=6861c888"
+	dsn := "username:passwprd@https(mock.clickzetta.com)/schema?virtualCluster=default&workspace=mock&instance=mock"
 	driver := ClickzettaDriver{}
 	conn, err := driver.Open(dsn)
 	if err != nil {
