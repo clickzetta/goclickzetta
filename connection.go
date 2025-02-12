@@ -7,11 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/clickzetta/goclickzetta/protos/bulkload/ingestion"
-	"github.com/clickzetta/goclickzetta/protos/bulkload/util"
-	"github.com/golang/protobuf/jsonpb"
-	"github.com/golang/protobuf/proto"
-	"github.com/valyala/fastjson"
 	"io"
 	"math/rand"
 	"net"
@@ -23,6 +18,12 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/clickzetta/goclickzetta/protos/bulkload/ingestion"
+	"github.com/clickzetta/goclickzetta/protos/bulkload/util"
+	"github.com/golang/protobuf/jsonpb"
+	"github.com/golang/protobuf/proto"
+	"github.com/valyala/fastjson"
 )
 
 type requestPath string
@@ -274,6 +275,7 @@ func (conn *ClickzettaConn) waitJobFinished(jsonValue *fastjson.Value, id jobId,
 					if responseJson.Exists("status") {
 						if responseJson.Get("status").Exists("state") {
 							status := responseJson.Get("status").Get("state").String()
+							status = strings.ReplaceAll(status, "\"", "")
 							if status == "SUCCEED" || status == "FAILED" {
 								logger.WithContext(conn.ctx).Infof("job finished, jobid: %v", id.ID)
 								if status == "SUCCEED" {
