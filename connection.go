@@ -105,19 +105,17 @@ func (conn *ClickzettaConn) execInternal(query string, id jobId, bindings []driv
 	sdkJobTimeout := 0
 	if bindings != nil {
 		for _, binding := range bindings {
-			if binding.Name == "hints" {
-				for _, hint := range strings.Split(binding.Value.(string), ";") {
-					hintKV := strings.Split(hint, "=")
-					if len(hintKV) != 2 {
-						logger.WithContext(conn.ctx).Errorf("invalid hint: %v", hint)
-						return nil, driver.ErrSkip
-					}
-					if hintKV[0] == "sdk.job.timeout" {
-						sdkJobTimeout, _ = strconv.Atoi(hintKV[1])
-						continue
-					}
-					hints[hintKV[0]] = hintKV[1]
+			for _, hint := range strings.Split(binding.Value.(string), ";") {
+				hintKV := strings.Split(hint, "=")
+				if len(hintKV) != 2 {
+					logger.WithContext(conn.ctx).Errorf("invalid hint: %v", hint)
+					return nil, driver.ErrSkip
 				}
+				if hintKV[0] == "sdk.job.timeout" {
+					sdkJobTimeout, _ = strconv.Atoi(hintKV[1])
+					continue
+				}
+				hints[hintKV[0]] = hintKV[1]
 			}
 		}
 	}

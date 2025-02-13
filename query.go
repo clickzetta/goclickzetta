@@ -3,15 +3,16 @@ package goclickzetta
 import (
 	"context"
 	"encoding/base64"
-	"github.com/aliyun/aliyun-oss-go-sdk/oss"
-	"github.com/apache/arrow/go/v12/arrow/ipc"
-	"github.com/tencentyun/cos-go-sdk-v5"
 	"net/http"
 	"net/url"
 	"reflect"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/aliyun/aliyun-oss-go-sdk/oss"
+	"github.com/apache/arrow/go/v12/arrow/ipc"
+	"github.com/tencentyun/cos-go-sdk-v5"
 )
 
 type queryDataType int
@@ -169,7 +170,9 @@ func (qd *execResponseData) init() error {
 			for _, file := range loc.LocationFiles {
 				qd.FileList = append(qd.FileList, file.FilePath)
 			}
-			url, err := url.Parse(loc.COSObjectStorageRegion)
+			fileInfo := strings.SplitN(loc.Location[0], "/", 4)
+			cosUrl := "https://" + fileInfo[2] + ".cos." + loc.COSObjectStorageRegion + ".myqcloud.com"
+			url, err := url.Parse(cosUrl)
 			if err != nil {
 				logger.WithContext(nil).Errorf("error: %v", err)
 				return err
@@ -365,8 +368,7 @@ func (qd *execResponseData) read() error {
 			}
 
 		} else if qd.ObjectStorageType == COS {
-			name := fileInfo[2] + "/" + fileInfo[3]
-			res, err := qd.COSClient.Object.Get(context.Background(), name, nil)
+			res, err := qd.COSClient.Object.Get(context.Background(), fileInfo[3], nil)
 			if err != nil {
 				logger.WithContext(nil).Errorf("error: %v", err)
 				return err
