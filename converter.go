@@ -399,7 +399,7 @@ func arrowToValue(
 			}
 		}
 		return err
-	case STRING, VARCHAR, CHAR:
+	case STRING, VARCHAR, CHAR, JSON:
 		str := srcValue.(*array.String)
 		for i := range destcol {
 			if !srcValue.IsNull(i) {
