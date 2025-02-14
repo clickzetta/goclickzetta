@@ -262,19 +262,21 @@ func (qd *execResponseData) parseSchema() {
 }
 
 func (qd *execResponseData) readMemoryData() error {
-	buffer := base64.NewDecoder(base64.StdEncoding, strings.NewReader(qd.HTTPResponseMessage.HttpResponseMessageResultSet.MemoryData.Data[0]))
-	reader, err := ipc.NewReader(buffer)
-	if err != nil {
-		logger.WithContext(nil).Errorf("error: %v", err)
-		return err
-	}
-	err = arrowToRows(qd, reader)
-	if err != nil {
-		logger.WithContext(nil).Errorf("error: %v", err)
-		return err
+	qd.Data = make([]interface{}, 0)
+	for _, data := range qd.HTTPResponseMessage.HttpResponseMessageResultSet.MemoryData.Data {
+		buffer := base64.NewDecoder(base64.StdEncoding, strings.NewReader(data))
+		reader, err := ipc.NewReader(buffer)
+		if err != nil {
+			logger.WithContext(nil).Errorf("error: %v", err)
+			return err
+		}
+		err = arrowToRows(qd, reader)
+		if err != nil {
+			logger.WithContext(nil).Errorf("error: %v", err)
+			return err
+		}
 	}
 	return nil
-
 }
 
 func arrowToRows(qd *execResponseData, reader *ipc.Reader) error {
@@ -307,7 +309,7 @@ func arrowToRows(qd *execResponseData, reader *ipc.Reader) error {
 			}
 		}
 	}
-	qd.Data = make([]interface{}, 0)
+
 	for i := 0; i < len(tempDataList[0]); i++ {
 		row := make([]interface{}, 0)
 		for j := 0; j < len(tempDataList); j++ {
@@ -343,8 +345,8 @@ func (qd *execResponseData) read() error {
 				IncludeQueryID: false,
 			}
 		}
+		qd.Data = make([]interface{}, 0)
 		if qd.CurrentFileIndex >= len(qd.FileList) {
-			qd.Data = make([]interface{}, 0)
 			return nil
 		}
 		fileName := qd.FileList[qd.CurrentFileIndex]
