@@ -144,12 +144,12 @@ func (qd *execResponseData) init() error {
 	} else if len(qd.HTTPResponseMessage.HttpResponseMessageResultSet.ObjectStorageLocation.Location) != 0 {
 		qd.DataType = File
 		loc := qd.HTTPResponseMessage.HttpResponseMessageResultSet.ObjectStorageLocation
+		qd.FileList = make([]string, 0)
+		for _, file := range loc.Location {
+			qd.FileList = append(qd.FileList, file)
+		}
 		if loc.FileSystem == "OSS" {
 			qd.ObjectStorageType = OSS
-			qd.FileList = make([]string, 0)
-			for _, file := range loc.LocationFiles {
-				qd.FileList = append(qd.FileList, file.FilePath)
-			}
 			option := oss.ClientOption(oss.SecurityToken(loc.Token))
 			client, err := oss.New(loc.OSSEndpoint, loc.ID, loc.Secret, option)
 			if err != nil {
@@ -166,10 +166,6 @@ func (qd *execResponseData) init() error {
 			qd.OSSBucket = bucket
 		} else if loc.FileSystem == "COS" {
 			qd.ObjectStorageType = COS
-			qd.FileList = make([]string, 0)
-			for _, file := range loc.LocationFiles {
-				qd.FileList = append(qd.FileList, file.FilePath)
-			}
 			fileInfo := strings.SplitN(loc.Location[0], "/", 4)
 			cosUrl := "https://" + fileInfo[2] + ".cos." + loc.COSObjectStorageRegion + ".myqcloud.com"
 			url, err := url.Parse(cosUrl)
