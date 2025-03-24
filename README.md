@@ -19,16 +19,16 @@ Get goclickzetta source code, if not installed.
 ```sh
 go get -u github.com/clickzetta/goclickzetta
 ```
-
+<!-- 
 # Docs
 
 For detailed documentation and basic usage examples, please see the documentation at
 [goclickzetta-doc](xxxx).
-
+-->
 
 # Development
 
-The developer notes are hosted with the source code on [GitHub](https://github.com/clickzetta/goclickzetta/tree/v0.0.1).
+The developer notes are hosted with the source code on [GitHub](https://github.com/clickzetta/goclickzetta/tree/v0.0.5).
 
 ## Example code
 
@@ -97,7 +97,7 @@ writer.Close()
 stream.Close()
 ```
 
-More examples can be found in the [examples](xxx).
+More examples can be found in the [examples](https://github.com/clickzetta/goclickzetta/blob/main/statement_test.go).
 
 ## DSN (Data Source Name)
 The Data Source Name has a common format, like the following:
