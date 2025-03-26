@@ -103,22 +103,28 @@ func (conn *ClickzettaConn) execInternal(query string, id jobId, bindings []driv
 	hints["cz.sql.adhoc.result.type"] = "embedded"
 	hints["cz.sql.adhoc.default.format"] = "arrow"
 	sdkJobTimeout := 0
-	if bindings != nil {
-		for _, binding := range bindings {
-			for _, hint := range strings.Split(binding.Value.(string), ";") {
-				hintKV := strings.Split(hint, "=")
-				if len(hintKV) != 2 {
-					logger.WithContext(conn.ctx).Errorf("invalid hint: %v", hint)
-					return nil, driver.ErrSkip
-				}
-				if hintKV[0] == "sdk.job.timeout" {
-					sdkJobTimeout, _ = strconv.Atoi(hintKV[1])
-					continue
-				}
-				hints[hintKV[0]] = hintKV[1]
-			}
+	multiQueries := splitSQL(query)
+
+	// set query as the last query in multiQueries
+	query = multiQueries[len(multiQueries)-1]
+	query = query + "\n;"
+
+	for _, hint := range multiQueries[:len(multiQueries)-1] {
+		hintKV := strings.Split(hint, "=")
+		if len(hintKV) != 2 {
+			logger.WithContext(conn.ctx).Errorf("invalid hint: %v", hint)
+			return nil, driver.ErrSkip
 		}
+		if hintKV[0] == "sdk.job.timeout" {
+			sdkJobTimeout, _ = strconv.Atoi(hintKV[1])
+			continue
+		}
+		hints[hintKV[0]] = hintKV[1]
 	}
+
+	// 用binding来填充query中的？占位符
+	query, _ = replacePlaceholders(query, bindings)
+
 	sqlConfig := sqlJobConfig{
 		TimeOut:        int64(0),
 		AdhocSizeLimit: "0",

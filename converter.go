@@ -419,7 +419,7 @@ func arrowToValue(
 
 		for i, t := range srcValue.(*array.Timestamp).TimestampValues() {
 			if !srcValue.IsNull(i) {
-				destcol[i] = t.ToTime(arrow.Microsecond).UTC().String()
+				destcol[i] = t.ToTime(arrow.Microsecond).UTC()
 			}
 		}
 
