@@ -49,5 +49,3 @@ require (
 	google.golang.org/protobuf v1.31.0 // indirect
 	gorm.io/gorm v1.25.12
 )
-
-replace github.com/clickzetta/goclickzetta v0.0.6 => /Users/calf/Documents/code/go/projects/goclickzetta
