@@ -3,6 +3,7 @@ package goclickzetta
 import (
 	"database/sql"
 	"database/sql/driver"
+	"encoding/json"
 	"fmt"
 	"math"
 	"math/big"
@@ -264,6 +265,69 @@ func decimalToBigFloat(num decimal128.Num, scale int64) *big.Float {
 	return new(big.Float).Quo(f, s)
 }
 
+// normalizeKeyValueJSON takes a JSON string potentially containing arrays of
+// objects with shape {"key":..., "value":...} and recursively converts those
+// arrays into JSON objects, so nested map-like data becomes object style.
+func normalizeKeyValueJSON(raw string) string {
+	var v interface{}
+	if err := json.Unmarshal([]byte(raw), &v); err != nil {
+		return raw
+	}
+	nv := transformKeyValueShape(v)
+	b, err := json.Marshal(nv)
+	if err != nil {
+		return raw
+	}
+	return string(b)
+}
+
+func transformKeyValueShape(v interface{}) interface{} {
+	switch x := v.(type) {
+	case []interface{}:
+		// Check if this is an array of {key,value} objects
+		allKV := true
+		obj := make(map[string]interface{})
+		for _, el := range x {
+			m, ok := el.(map[string]interface{})
+			if !ok {
+				allKV = false
+				break
+			}
+			// strict mode: only when key and value are present
+			if len(m) != 2 {
+				allKV = false
+				break
+			}
+			keyVal, hasKey := m["key"]
+			val, hasVal := m["value"]
+			if !hasKey || !hasVal {
+				allKV = false
+				break
+			}
+			keyStr, ok := keyVal.(string)
+			if !ok {
+				allKV = false
+				break
+			}
+			obj[keyStr] = transformKeyValueShape(val)
+		}
+		if allKV {
+			return obj
+		}
+		for i, el := range x {
+			x[i] = transformKeyValueShape(el)
+		}
+		return x
+	case map[string]interface{}:
+		for k, vv := range x {
+			x[k] = transformKeyValueShape(vv)
+		}
+		return x
+	default:
+		return v
+	}
+}
+
 func arrowToValue(
 	destcol []interface{},
 	srcColumnMeta execResponseColumnType,
@@ -377,6 +441,74 @@ func arrowToValue(
 			}
 		}
 		return err
+	case ARRAY:
+		switch data := srcValue.(type) {
+		case *array.List:
+			for i := range destcol {
+				if !srcValue.IsNull(i) {
+					destcol[i] = normalizeKeyValueJSON(data.ValueStr(i))
+				}
+			}
+		case *array.LargeList:
+			for i := range destcol {
+				if !srcValue.IsNull(i) {
+					destcol[i] = normalizeKeyValueJSON(data.ValueStr(i))
+				}
+			}
+		case *array.FixedSizeList:
+			for i := range destcol {
+				if !srcValue.IsNull(i) {
+					destcol[i] = normalizeKeyValueJSON(data.ValueStr(i))
+				}
+			}
+		default:
+			return fmt.Errorf("unsupported ARRAY arrow type: %T", srcValue)
+		}
+		return err
+	case MAP:
+		// Prefer object JSON when keys & items are strings
+		data := srcValue.(*array.Map)
+		if keys, ok := data.Keys().(*array.String); ok {
+			if items, ok := data.Items().(*array.String); ok {
+				for i := range destcol {
+					if srcValue.IsNull(i) {
+						continue
+					}
+					start, end := data.ValueOffsets(i)
+					m := make(map[string]string, end-start)
+					for j := int(start); j < int(end); j++ {
+						k := keys.Value(j)
+						var v string
+						if !items.IsNull(j) {
+							v = items.Value(j)
+						}
+						m[k] = v
+					}
+					b, e := json.Marshal(m)
+					if e != nil {
+						return e
+					}
+					destcol[i] = string(b)
+				}
+				return err
+			}
+		}
+		for i := range destcol {
+			if !srcValue.IsNull(i) {
+				destcol[i] = normalizeKeyValueJSON(data.ValueStr(i))
+			}
+		}
+		return err
+	case STRUCT:
+		if data, ok := srcValue.(*array.Struct); ok {
+			for i := range destcol {
+				if !srcValue.IsNull(i) {
+					destcol[i] = normalizeKeyValueJSON(data.ValueStr(i))
+				}
+			}
+			return err
+		}
+		return fmt.Errorf("unsupported STRUCT arrow type: %T", srcValue)
 	case BOOLEAN:
 		boolData := srcValue.(*array.Boolean)
 		for i := range destcol {

@@ -208,7 +208,8 @@ func replacePlaceholders(query string, bindings []driver.NamedValue) (string, er
 			// 根据值的类型进行格式化
 			switch v := value.(type) {
 			case string:
-				result.WriteString(fmt.Sprintf("'%s'", v))
+				cv, _ := handleComplexTypeParam(v)
+				result.WriteString(cv)
 			case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
 				result.WriteString(fmt.Sprintf("%d", v))
 			case float32, float64:
@@ -234,4 +235,14 @@ func replacePlaceholders(query string, bindings []driver.NamedValue) (string, er
 	}
 
 	return result.String(), nil
+}
+
+func handleComplexTypeParam(value string) (string, error) {
+	// if value is array/map/struct, return it directly; otherwise, add quotes
+	if (strings.HasPrefix(value, "array(") && strings.HasSuffix(value, ")")) ||
+		(strings.HasPrefix(value, "map(") && strings.HasSuffix(value, ")")) ||
+		(strings.HasPrefix(value, "struct(") && strings.HasSuffix(value, ")")) {
+		return value, nil
+	}
+	return fmt.Sprintf("'%s'", value), nil
 }
