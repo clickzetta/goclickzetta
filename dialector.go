@@ -95,6 +95,17 @@ func (dialector Dialector) Migrator(db *gorm.DB) gorm.Migrator {
 }
 
 func (dialector Dialector) Initialize(db *gorm.DB) error {
+	// register callbacks
+	callbackConfig := &callbacks.Config{
+		QueryClauses:  QueryClauses,
+		UpdateClauses: UpdateClauses,
+		DeleteClauses: DeleteClauses,
+	}
+
+	callbacks.RegisterDefaultCallbacks(db, callbackConfig)
+
+	db.Callback().Create().Replace("gorm:create", dialector.Create)
+
 	if dialector.DriverName == "" {
 		dialector.DriverName = DefaultDriverName
 	}
@@ -112,16 +123,6 @@ func (dialector Dialector) Initialize(db *gorm.DB) error {
 			return err
 		}
 	}
-
-	// register callbacks
-	callbackConfig := &callbacks.Config{
-		CreateClauses: CreateClauses,
-		QueryClauses:  QueryClauses,
-		UpdateClauses: UpdateClauses,
-		DeleteClauses: DeleteClauses,
-	}
-
-	callbacks.RegisterDefaultCallbacks(db, callbackConfig)
 
 	// for k, v := range dialector.ClauseBuilders() {
 	// 	db.ClauseBuilders[k] = v

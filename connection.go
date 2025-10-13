@@ -123,7 +123,9 @@ func (conn *ClickzettaConn) execInternal(query string, id jobId, bindings []driv
 	}
 
 	// 用binding来填充query中的？占位符
-	query, _ = replacePlaceholders(query, bindings)
+	if len(bindings) > 0 {
+		query, _ = replacePlaceholders(query, bindings)
+	}
 
 	sqlConfig := sqlJobConfig{
 		TimeOut:        int64(0),
@@ -327,7 +329,7 @@ func (conn *ClickzettaConn) waitJobFinished(jsonValue *fastjson.Value, id jobId,
 				} else {
 					finalResponse.Success = false
 					finalResponse.Message = "job failed, jobid: " + id.ID + ", error: " + jsonValue.String()
-					return finalResponse, nil
+					return finalResponse, errors.New(finalResponse.Message)
 				}
 			}
 
@@ -433,6 +435,10 @@ func (conn *ClickzettaConn) PrepareContext(
 	}
 	return stmt, nil
 }
+
+func (std *ClickzettaConn) CheckNamedValue(nv *driver.NamedValue) error { return nil }
+
+var _ driver.NamedValueChecker = (*ClickzettaConn)(nil)
 
 func (conn *ClickzettaConn) ExecContext(
 	ctx context.Context,
