@@ -4,25 +4,22 @@ import (
 	"context"
 	"errors"
 	"fmt"
+
 	"github.com/aliyun/aliyun-oss-go-sdk/oss"
-	"github.com/apache/arrow/go/v12/arrow"
-	"github.com/apache/arrow/go/v12/arrow/array"
-	"github.com/apache/arrow/go/v12/arrow/memory"
-	"github.com/apache/arrow/go/v12/parquet"
-	"github.com/apache/arrow/go/v12/parquet/pqarrow"
+
+	"io/fs"
+	"net/http"
+	"net/url"
+	"os"
+	"strconv"
+	"strings"
+	"time"
+
 	"github.com/clickzetta/goclickzetta/protos/bulkload/ingestion"
 	"github.com/clickzetta/goclickzetta/protos/bulkload/util"
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 	"github.com/tencentyun/cos-go-sdk-v5"
-	"io/fs"
-	"net/http"
-	"net/url"
-	"os"
-	"path/filepath"
-	"strconv"
-	"strings"
-	"time"
 )
 
 type BulkloadStream struct {
@@ -334,8 +331,6 @@ type BulkloadWriter struct {
 	CurrentRecordBatchSize int
 	CurrentRecordBatchRows int
 	EstimateRowStaticSize  int
-	ArrowSchema            *arrow.Schema
-	Writer                 *pqarrow.FileWriter
 	OSSBucket              *oss.Bucket
 	COSClient              *cos.Client
 	LocalLocation          string
@@ -618,10 +613,6 @@ func (bw *BulkloadWriter) Finish() error {
 }
 
 func (bw *BulkloadWriter) Abort() error {
-	err := bw.Writer.Close()
-	if err != nil {
-		logger.Error("Failed to close current file:", bw.MetaData.StreamInfo.GetStreamId(), err)
-	}
 	bw.CurrentRecordBatchSize = 0
 	bw.CurrentRecordBatchRows = 0
 	bw.CurrentTotalBytes = 0
@@ -683,81 +674,11 @@ func (bw *BulkloadWriter) ParsePartitionSpec() (map[string]string, error) {
 }
 
 func (bw *BulkloadWriter) CheckFileStatus() error {
-	if bw.Writer != nil {
-		if bw.CurrentTotalRows >= int(bw.BLConfig.GetMaxRowsPerFile()) || bw.CurrentTotalBytes >= int(bw.BLConfig.GetMaxBytesPerFile()) {
-			err := bw.CloseCurrentFile()
-			if err != nil {
-				logger.Error("Failed to close current file:", bw.CurrentFileName(), err)
-				return err
-			}
-		}
-	} else {
-		writer, err := bw.CreateNextFileWriter()
-		if err != nil {
-			logger.Error("Failed to create next file writer:", bw.CurrentFileName(), err)
-			return err
-		}
-		bw.Writer = writer
-	}
 	return nil
 
 }
 
-func (bw *BulkloadWriter) CreateNextFileWriter() (*pqarrow.FileWriter, error) {
-	fileName := bw.CurrentFileName()
-	fileNameDir := filepath.Dir(fileName)
-	_, err := os.Stat(fileNameDir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			err := os.MkdirAll(fileNameDir, 0777)
-			if err != nil {
-				logger.Error("Failed to create directory:", fileNameDir, err)
-				return nil, err
-			}
-		} else {
-			logger.Error("Failed to get file status:", fileNameDir, err)
-			return nil, err
-		}
-
-	}
-	file, err := os.Create(fileName)
-	if err != nil {
-		logger.Error("Failed to create file:", fileName, err)
-		return nil, err
-	}
-	props := parquet.NewWriterProperties()
-	writer, err := pqarrow.NewFileWriter(bw.ArrowSchema, file, props, pqarrow.DefaultWriterProps())
-	if err != nil {
-		logger.Error("Failed to create parquet writer:", fileName, err)
-		return nil, err
-	}
-	return writer, nil
-}
-
 func (bw *BulkloadWriter) CloseCurrentFile() error {
-	if bw.Writer != nil {
-		bufferSize, err := bw.FlushRecordBatch()
-		if err != nil {
-			logger.Error("Failed to flush record batch:", bw.MetaData.StreamInfo.GetStreamId(), err)
-			return err
-		}
-		err = bw.Writer.Close()
-		if err != nil {
-			logger.Error("Failed to close current file:", bw.CurrentFileName(), err)
-			return err
-		}
-		fileName, err := bw.UploadLocalFile()
-		if err != nil {
-			logger.Error("Failed to upload local file:", bw.CurrentFileName(), err)
-			return err
-		}
-		bw.FinishedFiles = append(bw.FinishedFiles, fileName)
-		bw.FinishedFileSizes = append(bw.FinishedFileSizes, bw.CurrentTotalBytes+bufferSize)
-		bw.CurrentTotalBytes = 0
-		bw.CurrentTotalRows = 0
-		bw.FileId++
-		bw.Writer = nil
-	}
 	return nil
 }
 
@@ -796,96 +717,12 @@ func (bw *BulkloadWriter) FlushRecordBatch() (int, error) {
 	if bw.CurrentRecordBatchRows == 0 {
 		return 0, nil
 	}
-	mem := memory.NewCheckedAllocator(memory.DefaultAllocator)
-	rb := array.NewRecordBuilder(mem, bw.ArrowSchema)
-	defer rb.Release()
-	for i, column := range bw.ArrowSchema.Fields() {
-		values := bw.CurrentRecordBatch[column.Name]
-		for _, value := range values {
-			if value == "" {
-				rb.Field(i).AppendNull()
-			} else {
-				err := AppendValueToArrowField(rb.Field(i), value, bw.MetaData.Table.Schema[column.Name])
-				if err != nil {
-					logger.Error("Failed to append value to arrow field:", bw.MetaData.StreamInfo.GetStreamId(), err)
-					return 0, err
-				}
-			}
-		}
-
-	}
-	recordBatch := rb.NewRecord()
-	err := bw.Writer.Write(recordBatch)
-	if err != nil {
-		logger.Error("Failed to write record batch:", bw.MetaData.StreamInfo.GetStreamId(), err)
-		return 0, err
-	}
-	bw.CurrentRecordBatch = nil
-	bw.CurrentRecordBatchSize = 0
-	bw.CurrentRecordBatchRows = 0
-	return mem.CurrentAlloc(), nil
+	return 0, nil
 
 }
 
 func (bw *BulkloadWriter) ConstructArrowSchema() error {
-	fields := bw.MetaData.Table.TableMeta.GetDataFields()
-	arrowFields := make([]arrow.Field, len(fields))
-	for i, column := range fields {
-		at, err := ConvertToArrowDataType(column.GetType())
-		if err != nil {
-			logger.Error("Failed to convert to arrow data type:", bw.MetaData.StreamInfo.GetStreamId(), err)
-			return err
-		}
-		arrowFields[i] = arrow.Field{Name: column.GetName(), Type: at}
-	}
-	bw.ArrowSchema = arrow.NewSchema(arrowFields, nil)
 	return nil
-}
-
-func ConvertToArrowDataType(tpe *util.DataType) (arrow.DataType, error) {
-	switch tpe.GetCategory() {
-	case util.DataTypeCategory_BOOLEAN:
-		return arrow.FixedWidthTypes.Boolean, nil
-	case util.DataTypeCategory_INT8:
-		return arrow.PrimitiveTypes.Int8, nil
-	case util.DataTypeCategory_INT16:
-		return arrow.PrimitiveTypes.Int16, nil
-	case util.DataTypeCategory_INT32:
-		return arrow.PrimitiveTypes.Int32, nil
-	case util.DataTypeCategory_INT64:
-		return arrow.PrimitiveTypes.Int64, nil
-	case util.DataTypeCategory_FLOAT32:
-		return arrow.PrimitiveTypes.Float32, nil
-	case util.DataTypeCategory_FLOAT64:
-		return arrow.PrimitiveTypes.Float64, nil
-	case util.DataTypeCategory_DECIMAL:
-		precision := int32(tpe.GetDecimalTypeInfo().GetPrecision())
-		scale := int32(tpe.GetDecimalTypeInfo().GetScale())
-		return &arrow.Decimal128Type{Precision: precision, Scale: scale}, nil
-	case util.DataTypeCategory_STRING:
-		return arrow.BinaryTypes.String, nil
-	case util.DataTypeCategory_DATE:
-		return arrow.FixedWidthTypes.Date32, nil
-	case util.DataTypeCategory_CHAR:
-		return arrow.BinaryTypes.String, nil
-	case util.DataTypeCategory_VARCHAR:
-		return arrow.BinaryTypes.String, nil
-	case util.DataTypeCategory_TIMESTAMP_LTZ:
-		tu := tpe.GetTimestampInfo().GetTsUnit()
-		if tu == util.TimestampUnit_SECONDS {
-			return arrow.FixedWidthTypes.Timestamp_s, nil
-		} else if tu == util.TimestampUnit_MILLISECONDS {
-			return arrow.FixedWidthTypes.Timestamp_ms, nil
-		} else if tu == util.TimestampUnit_MICROSECONDS {
-			return arrow.FixedWidthTypes.Timestamp_us, nil
-		} else if tu == util.TimestampUnit_NANOSECONDS {
-			return arrow.FixedWidthTypes.Timestamp_ns, nil
-		} else {
-			return nil, errors.New("Unsupported timestamp unit:" + tu.String())
-		}
-	default:
-		return nil, errors.New("Unsupported data type:" + tpe.String())
-	}
 }
 
 func ConvertToArrowValue(value interface{}, tpe *util.DataType) (string, error) {
@@ -971,169 +808,5 @@ func ConvertToArrowValue(value interface{}, tpe *util.DataType) (string, error) 
 		return v, nil
 	default:
 		return "", errors.New("Unsupported data type:" + tpe.String())
-	}
-}
-
-func AppendValueToArrowField(field array.Builder, value interface{}, tpe *util.DataType) error {
-	switch tpe.GetCategory() {
-	case util.DataTypeCategory_BOOLEAN:
-		v, err := ConvertToArrowValue(value, tpe)
-		if err != nil {
-			logger.Error("Failed to convert to arrow value:", err)
-			return err
-		}
-		err = field.(*array.BooleanBuilder).AppendValueFromString(v)
-		if err != nil {
-			logger.Error("Failed to append value to arrow field:", err)
-			return err
-		}
-		return nil
-	case util.DataTypeCategory_INT8:
-		v, err := ConvertToArrowValue(value, tpe)
-		if err != nil {
-			logger.Error("Failed to convert to arrow value:", err)
-			return err
-		}
-		err = field.(*array.Int8Builder).AppendValueFromString(v)
-		if err != nil {
-			logger.Error("Failed to append value to arrow field:", err)
-			return err
-		}
-		return nil
-	case util.DataTypeCategory_INT16:
-		v, err := ConvertToArrowValue(value, tpe)
-		if err != nil {
-			logger.Error("Failed to convert to arrow value:", err)
-			return err
-		}
-		err = field.(*array.Int16Builder).AppendValueFromString(v)
-		if err != nil {
-			logger.Error("Failed to append value to arrow field:", err)
-			return err
-		}
-		return nil
-	case util.DataTypeCategory_INT32:
-		v, err := ConvertToArrowValue(value, tpe)
-		if err != nil {
-			logger.Error("Failed to convert to arrow value:", err)
-			return err
-		}
-		err = field.(*array.Int32Builder).AppendValueFromString(v)
-		if err != nil {
-			logger.Error("Failed to append value to arrow field:", err)
-			return err
-		}
-		return nil
-	case util.DataTypeCategory_INT64:
-		v, err := ConvertToArrowValue(value, tpe)
-		if err != nil {
-			logger.Error("Failed to convert to arrow value:", err)
-			return err
-		}
-		err = field.(*array.Int64Builder).AppendValueFromString(v)
-		if err != nil {
-			logger.Error("Failed to append value to arrow field:", err)
-			return err
-		}
-		return nil
-	case util.DataTypeCategory_FLOAT32:
-		v, err := ConvertToArrowValue(value, tpe)
-		if err != nil {
-			logger.Error("Failed to convert to arrow value:", err)
-			return err
-		}
-		err = field.(*array.Float32Builder).AppendValueFromString(v)
-		if err != nil {
-			logger.Error("Failed to append value to arrow field:", err)
-			return err
-		}
-		return nil
-	case util.DataTypeCategory_FLOAT64:
-		v, err := ConvertToArrowValue(value, tpe)
-		if err != nil {
-			logger.Error("Failed to convert to arrow value:", err)
-			return err
-		}
-		err = field.(*array.Float64Builder).AppendValueFromString(v)
-		if err != nil {
-			logger.Error("Failed to append value to arrow field:", err)
-			return err
-		}
-		return nil
-	case util.DataTypeCategory_DECIMAL:
-		v, err := ConvertToArrowValue(value, tpe)
-		if err != nil {
-			logger.Error("Failed to convert to arrow value:", err)
-			return err
-		}
-		err = field.(*array.Decimal128Builder).AppendValueFromString(v)
-		if err != nil {
-			logger.Error("Failed to append value to arrow field:", err)
-			return err
-		}
-		return nil
-	case util.DataTypeCategory_CHAR:
-		v, err := ConvertToArrowValue(value, tpe)
-		if err != nil {
-			logger.Error("Failed to convert to arrow value:", err)
-			return err
-		}
-		err = field.(*array.StringBuilder).AppendValueFromString(v)
-		if err != nil {
-			logger.Error("Failed to append value to arrow field:", err)
-			return err
-		}
-		return nil
-	case util.DataTypeCategory_STRING:
-		v, err := ConvertToArrowValue(value, tpe)
-		if err != nil {
-			logger.Error("Failed to convert to arrow value:", err)
-			return err
-		}
-		err = field.(*array.StringBuilder).AppendValueFromString(v)
-		if err != nil {
-			logger.Error("Failed to append value to arrow field:", err)
-			return err
-		}
-		return nil
-	case util.DataTypeCategory_VARCHAR:
-		v, err := ConvertToArrowValue(value, tpe)
-		if err != nil {
-			logger.Error("Failed to convert to arrow value:", err)
-			return err
-		}
-		err = field.(*array.StringBuilder).AppendValueFromString(v)
-		if err != nil {
-			logger.Error("Failed to append value to arrow field:", err)
-			return err
-		}
-		return nil
-	case util.DataTypeCategory_DATE:
-		v, err := ConvertToArrowValue(value, tpe)
-		if err != nil {
-			logger.Error("Failed to convert to arrow value:", err)
-			return err
-		}
-		err = field.(*array.Date32Builder).AppendValueFromString(v)
-		if err != nil {
-			logger.Error("Failed to append value to arrow field:", err)
-			return err
-		}
-		return nil
-	case util.DataTypeCategory_TIMESTAMP_LTZ:
-		v, err := ConvertToArrowValue(value, tpe)
-		if err != nil {
-			logger.Error("Failed to convert to arrow value:", err)
-			return err
-		}
-		err = field.(*array.TimestampBuilder).AppendValueFromString(v)
-		if err != nil {
-			logger.Error("Failed to append value to arrow field:", err)
-			return err
-		}
-		return nil
-
-	default:
-		return errors.New("Unsupported data type:" + tpe.String())
 	}
 }

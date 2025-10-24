@@ -101,7 +101,14 @@ func (conn *ClickzettaConn) execInternal(query string, id jobId, bindings []driv
 	finalResponse.Data.QuerySQL = query
 	hints := make(map[string]interface{})
 	hints["cz.sql.adhoc.result.type"] = "embedded"
-	hints["cz.sql.adhoc.default.format"] = "arrow"
+	// allow selecting result format via DSN param: resultFormat=arrow|text
+	format := "arrow"
+	if conn.cfg != nil && conn.cfg.Params != nil {
+		if v, ok := conn.cfg.Params["resultFormat"]; ok && v != nil && *v != "" {
+			format = *v
+		}
+	}
+	hints["cz.sql.adhoc.default.format"] = format
 	sdkJobTimeout := 0
 	multiQueries := splitSQL(query)
 

@@ -1,8 +1,11 @@
 package goclickzetta
 
 import (
+	"bufio"
 	"context"
 	"encoding/base64"
+	"encoding/json"
+	"io"
 	"net/http"
 	"net/url"
 	"reflect"
@@ -11,7 +14,6 @@ import (
 	"time"
 
 	"github.com/aliyun/aliyun-oss-go-sdk/oss"
-	"github.com/apache/arrow/go/v12/arrow/ipc"
 	"github.com/tencentyun/cos-go-sdk-v5"
 )
 
@@ -261,13 +263,7 @@ func (qd *execResponseData) readMemoryData() error {
 	qd.Data = make([]interface{}, 0)
 	for _, data := range qd.HTTPResponseMessage.HttpResponseMessageResultSet.MemoryData.Data {
 		buffer := base64.NewDecoder(base64.StdEncoding, strings.NewReader(data))
-		reader, err := ipc.NewReader(buffer)
-		if err != nil {
-			logger.WithContext(nil).Errorf("error: %v", err)
-			return err
-		}
-		err = arrowToRows(qd, reader)
-		if err != nil {
+		if err := textToRows(qd, buffer); err != nil {
 			logger.WithContext(nil).Errorf("error: %v", err)
 			return err
 		}
@@ -275,45 +271,215 @@ func (qd *execResponseData) readMemoryData() error {
 	return nil
 }
 
-func arrowToRows(qd *execResponseData, reader *ipc.Reader) error {
-	tempDataList := make(map[int][]interface{}, 0)
-
-	for reader.Next() {
-		record := reader.Record()
-
-		for index, column := range record.Columns() {
-			if tempDataList[index] == nil {
-				des := make([]interface{}, column.Len())
-				timeLocation := time.Local
-				err := arrowToValue(des, qd.Schema[index], column, timeLocation, false)
-				if err != nil {
-					logger.WithContext(nil).Errorf("error: %v", err)
-					return err
+// textToRows parses CSV-like rows (comma separated) from r.
+// It appends parsed rows into qd.Data as [][]interface{}.
+func textToRows(qd *execResponseData, r io.Reader) error {
+	reader := bufio.NewReader(r)
+	delimiter := byte(',')
+	limit := len(qd.Schema)
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil && err != io.EOF {
+			return err
+		}
+		// trim trailing \n or \r\n
+		line = strings.TrimRight(line, "\r\n")
+		if len(line) > 0 || err == io.EOF { // process even last line without newline
+			fields := splitLineWithLimit(line, delimiter, limit)
+			row := make([]interface{}, len(fields))
+			for i := 0; i < len(fields); i++ {
+				if fields[i] == nil {
+					row[i] = nil
+					continue
 				}
-				tempDataList[index] = des
-
-			} else {
-				des := make([]interface{}, column.Len())
-				timeLocation := time.Local
-				err := arrowToValue(des, qd.Schema[index], column, timeLocation, false)
+				s, _ := fields[i].(string)
+				v, err := convertTextValue(qd.Schema[i], s)
 				if err != nil {
-					logger.WithContext(nil).Errorf("error: %v", err)
-					return err
+					// 如果转换失败，保留原字符串
+					row[i] = s
+					continue
 				}
-				tempDataList[index] = append(tempDataList[index], des...)
-
+				row[i] = v
 			}
+			qd.Data = append(qd.Data, row)
 		}
-	}
-
-	for i := 0; i < len(tempDataList[0]); i++ {
-		row := make([]interface{}, 0)
-		for j := 0; j < len(tempDataList); j++ {
-			row = append(row, tempDataList[j][i])
+		if err == io.EOF {
+			break
 		}
-		qd.Data = append(qd.Data, row)
 	}
 	return nil
+}
+
+// splitLineWithLimit implements delimiter-based split with escape handling and field limit.
+// - delimiter: byte delimiter (e.g., ',')
+// - limit: number of fields expected; if >0, pad with nil to that length
+// - "\\N" literal becomes nil
+func splitLineWithLimit(s string, delimiter byte, limit int) []interface{} {
+	result := make([]interface{}, 0, maxInt(limit, 1))
+	var sb strings.Builder
+	for i := 0; i < len(s); i++ {
+		cur := s[i]
+		if cur == delimiter {
+			if limit > 0 && len(result) == limit-1 && i != len(s)-1 {
+				sb.WriteString(s[i:])
+				i = len(s) - 1
+			}
+			v := sb.String()
+			if v == "\\N" {
+				result = append(result, nil)
+			} else {
+				result = append(result, v)
+			}
+			if limit > 0 && len(result) == limit {
+				break
+			}
+			sb.Reset()
+		} else if cur == '\\' && i+1 < len(s) {
+			// keep escape and next char
+			sb.WriteByte(cur)
+			sb.WriteByte(s[i+1])
+			i++
+		} else {
+			sb.WriteByte(cur)
+		}
+	}
+	if limit <= 0 || len(result) < limit {
+		v := sb.String()
+		if v == "\\N" {
+			result = append(result, nil)
+		} else {
+			result = append(result, v)
+		}
+	}
+	if limit > 0 {
+		for len(result) < limit {
+			result = append(result, nil)
+		}
+		if len(result) > limit {
+			result = result[:limit]
+		}
+	}
+	return result
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+// convertTextValue converts a string cell to a typed value according to schema
+func convertTextValue(col execResponseColumnType, s string) (interface{}, error) {
+	t := strings.ToUpper(col.Type)
+	switch t {
+	case "BOOLEAN":
+		if s == "" {
+			return nil, nil
+		}
+		b, err := strconv.ParseBool(s)
+		if err != nil {
+			return nil, err
+		}
+		return b, nil
+	case "TINYINT", "INT8":
+		if s == "" {
+			return nil, nil
+		}
+		n, err := strconv.ParseInt(s, 10, 8)
+		if err != nil {
+			return nil, err
+		}
+		return int8(n), nil
+	case "SMALLINT", "INT16":
+		if s == "" {
+			return nil, nil
+		}
+		n, err := strconv.ParseInt(s, 10, 16)
+		if err != nil {
+			return nil, err
+		}
+		return int16(n), nil
+	case "INT", "INT32":
+		if s == "" {
+			return nil, nil
+		}
+		n, err := strconv.ParseInt(s, 10, 32)
+		if err != nil {
+			return nil, err
+		}
+		return int32(n), nil
+	case "BIGINT", "INT64":
+		if s == "" {
+			return nil, nil
+		}
+		n, err := strconv.ParseInt(s, 10, 64)
+		if err != nil {
+			return nil, err
+		}
+		return n, nil
+	case "FLOAT", "FLOAT32":
+		if s == "" {
+			return nil, nil
+		}
+		f, err := strconv.ParseFloat(s, 32)
+		if err != nil {
+			return nil, err
+		}
+		return float32(f), nil
+	case "DOUBLE", "FLOAT64":
+		if s == "" {
+			return nil, nil
+		}
+		f, err := strconv.ParseFloat(s, 64)
+		if err != nil {
+			return nil, err
+		}
+		return f, nil
+	case "STRING", "VARCHAR", "CHAR":
+		return s, nil
+	case "JSON", "ARRAY", "MAP", "STRUCT":
+		if len(s) > 0 && (s[0] == '[' || s[0] == '{') {
+			var v interface{}
+			if err := json.Unmarshal([]byte(s), &v); err == nil {
+				return v, nil
+			}
+		}
+		return s, nil
+	case "DATE":
+		if s == "" {
+			return nil, nil
+		}
+		// assume yyyy-mm-dd
+		t, err := time.Parse("2006-01-02", s)
+		if err != nil {
+			return nil, err
+		}
+		return t.UTC(), nil
+	case "TIMESTAMP_LTZ":
+		if s == "" {
+			return nil, nil
+		}
+		// try common layouts
+		layouts := []string{time.RFC3339Nano, time.RFC3339, "2006-01-02 15:04:05.999999999", "2006-01-02 15:04:05"}
+		var parsed time.Time
+		var perr error
+		for _, layout := range layouts {
+			if tt, e := time.Parse(layout, s); e == nil {
+				parsed = tt
+				perr = nil
+				break
+			} else {
+				perr = e
+			}
+		}
+		if perr != nil {
+			return nil, perr
+		}
+		return parsed.UTC(), nil
+	default:
+		return s, nil
+	}
 }
 
 func (qd *execResponseData) read() error {
@@ -354,12 +520,10 @@ func (qd *execResponseData) read() error {
 				logger.WithContext(nil).Errorf("error: %v", err)
 				return err
 			}
-			reader, err := ipc.NewReader(stream)
-			if err != nil {
+			if err := textToRows(qd, stream); err != nil {
 				logger.WithContext(nil).Errorf("error: %v", err)
 				return err
 			}
-			err = arrowToRows(qd, reader)
 			if err != nil {
 				logger.WithContext(nil).Errorf("error: %v", err)
 				return err
@@ -371,12 +535,10 @@ func (qd *execResponseData) read() error {
 				logger.WithContext(nil).Errorf("error: %v", err)
 				return err
 			}
-			reader, err := ipc.NewReader(res.Body)
-			if err != nil {
+			if err := textToRows(qd, res.Body); err != nil {
 				logger.WithContext(nil).Errorf("error: %v", err)
 				return err
 			}
-			err = arrowToRows(qd, reader)
 			if err != nil {
 				logger.WithContext(nil).Errorf("error: %v", err)
 				return err

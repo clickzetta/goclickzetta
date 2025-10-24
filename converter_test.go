@@ -5,9 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/apache/arrow/go/v12/arrow"
-	"github.com/apache/arrow/go/v12/arrow/array"
-	"github.com/apache/arrow/go/v12/arrow/memory"
 	"github.com/zeebo/assert"
 )
 
@@ -82,64 +79,4 @@ func TestNormalize_ValuesNonString(t *testing.T) {
 	assert.NoError(t, json.Unmarshal([]byte(out), &got))
 	assert.Equal(t, float64(123), got["n"]) // json number is float64
 	assert.Equal(t, true, got["b"])
-}
-
-// ---------- arrowToValue coverage (MAP string/string and fallback) ----------
-
-func buildMapArrayStringString(keys, values []string) *array.Map {
-	mb := array.NewMapBuilder(memory.DefaultAllocator, arrow.BinaryTypes.String, arrow.BinaryTypes.String, false)
-	kb := mb.KeyBuilder().(*array.StringBuilder)
-	vb := mb.ItemBuilder().(*array.StringBuilder)
-	mb.Append(true)
-	for i := range keys {
-		kb.Append(keys[i])
-		vb.Append(values[i])
-	}
-	arr := mb.NewMapArray()
-	mb.Release()
-	return arr
-}
-
-func buildMapArrayStringInt(keys []string, values []int32) *array.Map {
-	mb := array.NewMapBuilder(memory.DefaultAllocator, arrow.BinaryTypes.String, arrow.PrimitiveTypes.Int32, false)
-	kb := mb.KeyBuilder().(*array.StringBuilder)
-	vb := mb.ItemBuilder().(*array.Int32Builder)
-	mb.Append(true)
-	for i := range keys {
-		kb.Append(keys[i])
-		vb.Append(values[i])
-	}
-	arr := mb.NewMapArray()
-	mb.Release()
-	return arr
-}
-
-func TestArrowToValue_Map_StringString_ObjectJSON(t *testing.T) {
-	arr := buildMapArrayStringString([]string{"trace_id", "version"}, []string{"t-001", "1"})
-	defer arr.Release()
-
-	meta := execResponseColumnType{Type: "MAP"}
-	dest := make([]interface{}, arr.Len())
-	err := arrowToValue(dest, meta, arr, time.Local, false)
-	assert.NoError(t, err)
-	// should be object JSON
-	var got map[string]string
-	assert.NoError(t, json.Unmarshal([]byte(dest[0].(string)), &got))
-	assert.Equal(t, "t-001", got["trace_id"])
-	assert.Equal(t, "1", got["version"])
-}
-
-func TestArrowToValue_Map_StringInt_FallbackNormalize(t *testing.T) {
-	arr := buildMapArrayStringInt([]string{"n", "m"}, []int32{10, 20})
-	defer arr.Release()
-
-	meta := execResponseColumnType{Type: "MAP"}
-	dest := make([]interface{}, arr.Len())
-	err := arrowToValue(dest, meta, arr, time.Local, false)
-	assert.NoError(t, err)
-	// should be object JSON, number should be number
-	var got map[string]interface{}
-	assert.NoError(t, json.Unmarshal([]byte(dest[0].(string)), &got))
-	assert.Equal(t, float64(10), got["n"]) // json number is float64
-	assert.Equal(t, float64(20), got["m"]) // json number is float64
 }
