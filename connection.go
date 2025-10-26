@@ -102,13 +102,14 @@ func (conn *ClickzettaConn) execInternal(query string, id jobId, bindings []driv
 	hints := make(map[string]interface{})
 	hints["cz.sql.adhoc.result.type"] = "embedded"
 	// allow selecting result format via DSN param: resultFormat=arrow|text
-	format := "arrow"
+	format := "csv"
 	if conn.cfg != nil && conn.cfg.Params != nil {
 		if v, ok := conn.cfg.Params["resultFormat"]; ok && v != nil && *v != "" {
 			format = *v
 		}
 	}
 	hints["cz.sql.adhoc.default.format"] = format
+	hints["cz.storage.csv.asjdbc"] = "false"
 	sdkJobTimeout := 0
 	multiQueries := splitSQL(query)
 
@@ -226,7 +227,9 @@ func (conn *ClickzettaConn) waitJobFinished(jsonValue *fastjson.Value, id jobId,
 		if jsonValue.Get("status").Exists("state") {
 			status := jsonValue.Get("status").Get("state").String()
 			status = strings.ReplaceAll(status, "\"", "")
-			if status == "QUEUEING" || status == "RUNNING" || status == "SETUP" {
+			data := jsonValue.Get("result_set").Get("data")
+			location := jsonValue.Get("result_set").Get("location")
+			if (status == "QUEUEING" || status == "RUNNING" || status == "SETUP") && (data == nil && location == nil) {
 				account := clickzettaAccoount{
 					UserId: 0,
 				}

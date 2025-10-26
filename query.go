@@ -1,9 +1,9 @@
 package goclickzetta
 
 import (
-	"bufio"
 	"context"
 	"encoding/base64"
+	"encoding/csv"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -274,100 +274,45 @@ func (qd *execResponseData) readMemoryData() error {
 // textToRows parses CSV-like rows (comma separated) from r.
 // It appends parsed rows into qd.Data as [][]interface{}.
 func textToRows(qd *execResponseData, r io.Reader) error {
-	reader := bufio.NewReader(r)
-	delimiter := byte(',')
+	cr := csv.NewReader(r)
+	cr.Comma = ','
+	cr.LazyQuotes = true
+	cr.FieldsPerRecord = -1 // allow variable columns
 	limit := len(qd.Schema)
 	for {
-		line, err := reader.ReadString('\n')
-		if err != nil && err != io.EOF {
-			return err
-		}
-		// trim trailing \n or \r\n
-		line = strings.TrimRight(line, "\r\n")
-		if len(line) > 0 || err == io.EOF { // process even last line without newline
-			fields := splitLineWithLimit(line, delimiter, limit)
-			row := make([]interface{}, len(fields))
-			for i := 0; i < len(fields); i++ {
-				if fields[i] == nil {
-					row[i] = nil
-					continue
-				}
-				s, _ := fields[i].(string)
-				v, err := convertTextValue(qd.Schema[i], s)
-				if err != nil {
-					// 如果转换失败，保留原字符串
-					row[i] = s
-					continue
-				}
-				row[i] = v
-			}
-			qd.Data = append(qd.Data, row)
-		}
+		rec, err := cr.Read()
 		if err == io.EOF {
 			break
 		}
+		if err != nil {
+			return err
+		}
+		// build row with schema-based conversion and padding
+		row := make([]interface{}, limit)
+		for i := 0; i < limit; i++ {
+			var cell string
+			if i < len(rec) {
+				cell = rec[i]
+			} else {
+				cell = ""
+			}
+			if cell == "\\N" || cell == "" {
+				row[i] = nil
+				continue
+			}
+			v, convErr := convertTextValue(qd.Schema[i], cell)
+			if convErr != nil {
+				row[i] = cell
+			} else {
+				row[i] = v
+			}
+		}
+		qd.Data = append(qd.Data, row)
 	}
 	return nil
 }
 
-// splitLineWithLimit implements delimiter-based split with escape handling and field limit.
-// - delimiter: byte delimiter (e.g., ',')
-// - limit: number of fields expected; if >0, pad with nil to that length
-// - "\\N" literal becomes nil
-func splitLineWithLimit(s string, delimiter byte, limit int) []interface{} {
-	result := make([]interface{}, 0, maxInt(limit, 1))
-	var sb strings.Builder
-	for i := 0; i < len(s); i++ {
-		cur := s[i]
-		if cur == delimiter {
-			if limit > 0 && len(result) == limit-1 && i != len(s)-1 {
-				sb.WriteString(s[i:])
-				i = len(s) - 1
-			}
-			v := sb.String()
-			if v == "\\N" {
-				result = append(result, nil)
-			} else {
-				result = append(result, v)
-			}
-			if limit > 0 && len(result) == limit {
-				break
-			}
-			sb.Reset()
-		} else if cur == '\\' && i+1 < len(s) {
-			// keep escape and next char
-			sb.WriteByte(cur)
-			sb.WriteByte(s[i+1])
-			i++
-		} else {
-			sb.WriteByte(cur)
-		}
-	}
-	if limit <= 0 || len(result) < limit {
-		v := sb.String()
-		if v == "\\N" {
-			result = append(result, nil)
-		} else {
-			result = append(result, v)
-		}
-	}
-	if limit > 0 {
-		for len(result) < limit {
-			result = append(result, nil)
-		}
-		if len(result) > limit {
-			result = result[:limit]
-		}
-	}
-	return result
-}
-
-func maxInt(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
+// removed custom splitter; csv.Reader handles RFC4180 quoting/escaping
 
 // convertTextValue converts a string cell to a typed value according to schema
 func convertTextValue(col execResponseColumnType, s string) (interface{}, error) {
