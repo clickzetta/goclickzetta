@@ -49,6 +49,14 @@ var HTTPTransport = &http.Transport{
 
 type atomicBool = atomic.Bool
 
+type driverTimeoutError struct {
+	msg string
+}
+
+func (e driverTimeoutError) Error() string   { return e.msg }
+func (e driverTimeoutError) Timeout() bool   { return true }
+func (e driverTimeoutError) Temporary() bool { return true }
+
 type ClickzettaConn struct {
 	ctx      context.Context
 	cfg      *Config
@@ -253,7 +261,7 @@ func (conn *ClickzettaConn) waitJobFinished(jsonValue *fastjson.Value, id jobId,
 						logger.WithContext(conn.ctx).Errorf("job timeout, jobid: %v", id.ID)
 						finalResponse.Success = false
 						finalResponse.Message = "job timeout, jobid: " + id.ID
-						return finalResponse, driver.ErrBadConn
+						return finalResponse, driverTimeoutError{"job timeout, jobid: " + id.ID}
 					}
 					res, err := conn.internal.Post(conn.ctx, url, headers, jsonData, 0)
 					if err != nil {
@@ -313,7 +321,7 @@ func (conn *ClickzettaConn) waitJobFinished(jsonValue *fastjson.Value, id jobId,
 					}
 				}
 
-			} else if status == "SUCCEED" || status == "FAILED" {
+			} else if status == "SUCCEED" || status == "FAILED" || status == "CANCELLED" {
 				logger.WithContext(conn.ctx).Infof("job finished, jobid: %v", id.ID)
 				if status == "SUCCEED" {
 					finalResponse.Success = true
@@ -326,9 +334,13 @@ func (conn *ClickzettaConn) waitJobFinished(jsonValue *fastjson.Value, id jobId,
 						return finalResponse, err
 					}
 					return finalResponse, nil
-				} else {
+				} else if status == "FAILED" {
 					finalResponse.Success = false
 					finalResponse.Message = "job failed, jobid: " + id.ID + ", error: " + jsonValue.String()
+					return finalResponse, errors.New(finalResponse.Message)
+				} else if status == "CANCELLED" {
+					finalResponse.Success = false
+					finalResponse.Message = "job cancelled, jobid: " + id.ID
 					return finalResponse, errors.New(finalResponse.Message)
 				}
 			}
