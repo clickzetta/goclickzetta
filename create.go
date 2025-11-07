@@ -1,8 +1,6 @@
 package goclickzetta
 
 import (
-	"encoding/json"
-	"fmt"
 	"strings"
 
 	"gorm.io/gorm"
@@ -28,34 +26,30 @@ func (dialector *Dialector) Create(db *gorm.DB) {
 					Values:  [][]interface{}{},
 				}
 				db.Statement.AddClause(prepareValues)
-				db.Statement.Build("INSERT", "VALUES")
+				db.Statement.Build("INSERT", "VALUES", "ON CONFLICT")
 
-				allParts := make([]string, 0, len(values.Values))
-				for _, value := range values.Values {
-					// value is typically []interface{} (one row). If it's a slice, stringify it
-					parts := make([]string, 0, len(value))
-					for _, v := range value {
-						b, err := json.Marshal(v)
-						if err != nil {
-							return
-						}
-						parts = append(parts, string(b))
-					}
-					row := fmt.Sprintf("(%s)", strings.Join(parts, ","))
-					allParts = append(allParts, row)
+				sql := db.Statement.SQL.String()
+				i := strings.LastIndex(sql, "VALUES")
+				if i == -1 {
+					i = len(sql)
 				}
-				allRows := strings.Join(allParts, ",")
-
-				sql := db.Statement.SQL.String() + " " + allRows
-
-				result, err := db.Statement.ConnPool.ExecContext(db.Statement.Context, sql)
-
-				if db.Statement.Result != nil {
-					db.Statement.Result.Result = result
+				sql = sql[:i] + "using arrow" + sql[i+len("VALUES"):]
+				_, err := db.Statement.ConnPool.ExecContext(db.Statement.Context, sql, values.Values)
+				if db.AddError(err) != nil {
+					return
 				}
-				db.AddError(err)
+
 				return
 			}
+		}
+
+		if !db.DryRun && db.Error == nil {
+			result, err := db.Statement.ConnPool.ExecContext(db.Statement.Context, db.Statement.SQL.String(), db.Statement.Vars...)
+
+			if db.Statement.Result != nil {
+				db.Statement.Result.Result = result
+			}
+			db.AddError(err)
 		}
 	}
 }

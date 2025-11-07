@@ -24,11 +24,22 @@ type sqlJobConfig struct {
 }
 
 func (cfg *sqlJobConfig) properties() map[string]interface{} {
-	return map[string]interface{}{
+	props := map[string]interface{}{
 		"timeout":        cfg.TimeOut,
 		"adhocSizeLimit": cfg.AdhocSizeLimit,
 		"adhocRowLimit":  cfg.AdhocRowLimit,
 		"hint":           cfg.Hint,
+	}
+	return props
+}
+
+type BinaryValues struct {
+	inputs [][]byte
+}
+
+func (bv *BinaryValues) properties() map[string]interface{} {
+	return map[string]interface{}{
+		"inputs": bv.inputs,
 	}
 }
 
@@ -36,6 +47,7 @@ type sqlJob struct {
 	Query            []string
 	DefaultNamespace []string
 	SQLJobConfig     *sqlJobConfig
+	BinaryValues     *BinaryValues
 }
 
 func (job *sqlJob) properties() map[string]interface{} {
@@ -43,6 +55,7 @@ func (job *sqlJob) properties() map[string]interface{} {
 		"query":            job.Query,
 		"defaultNamespace": job.DefaultNamespace,
 		"sqlConfig":        job.SQLJobConfig.properties(),
+		"binaryValues":     job.BinaryValues.properties(),
 	}
 }
 

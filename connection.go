@@ -98,7 +98,6 @@ func (conn *ClickzettaConn) exec(
 		logger.WithContext(ctx).Errorf("execInternal error: %v", err)
 		return res, err
 	}
-
 	return res, nil
 }
 
@@ -130,9 +129,27 @@ func (conn *ClickzettaConn) execInternal(query string, id jobId, bindings []driv
 		hints[hintKV[0]] = hintKV[1]
 	}
 
-	// 用binding来填充query中的？占位符
-	if len(bindings) > 0 {
+	isSeprate := false
+	if conn.cfg.Params != nil {
+		if _, ok := conn.cfg.Params["separate_params"]; ok {
+			isSeprate = *conn.cfg.Params["separate_params"] == "true"
+		}
+	}
+
+	// use bindings to fill the ? placeholders in query
+	if len(bindings) > 0 && (!isSeprate || !strings.HasPrefix(query, "INSERT")) {
 		query, _ = replacePlaceholders(query, bindings)
+	}
+
+	// convert bindings to Arrow IPC binary data
+	arrowBinary := [][]byte{}
+	err := error(nil)
+	if len(bindings) > 0 && isSeprate && strings.HasPrefix(query, "INSERT") {
+		arrowBinary, err = convertBindingsToArrowBinary(bindings)
+		if err != nil {
+			logger.WithContext(conn.ctx).Errorf("failed to convert bindings to arrow format: %v", err)
+			return nil, fmt.Errorf("failed to convert bindings to arrow format: %w", err)
+		}
 	}
 
 	sqlConfig := sqlJobConfig{
@@ -151,6 +168,9 @@ func (conn *ClickzettaConn) execInternal(query string, id jobId, bindings []driv
 			schema,
 		},
 		SQLJobConfig: &sqlConfig,
+		BinaryValues: &BinaryValues{
+			inputs: arrowBinary,
+		},
 	}
 
 	jobDesc := jobDesc{
