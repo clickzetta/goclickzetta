@@ -93,7 +93,7 @@ func (conn *ClickzettaConn) exec(
 		InstanceId: 0,
 	}
 
-	res, err := conn.execInternal(query, jobId, bindings)
+	res, err := conn.execInternal(ctx, query, jobId, bindings)
 	if err != nil {
 		logger.WithContext(ctx).Errorf("execInternal error: %v", err)
 		return res, err
@@ -101,8 +101,8 @@ func (conn *ClickzettaConn) exec(
 	return res, nil
 }
 
-func (conn *ClickzettaConn) execInternal(query string, id jobId, bindings []driver.NamedValue) (*execResponse, error) {
-	logger.WithContext(conn.ctx).Infof("execInternal: %v with jobid: %v", query, id.ID)
+func (conn *ClickzettaConn) execInternal(ctx context.Context, query string, id jobId, bindings []driver.NamedValue) (*execResponse, error) {
+	logger.WithContext(ctx).Infof("execInternal: %v with jobid: %v", query, id.ID)
 	finalResponse := &execResponse{}
 	finalResponse.Data.JobId = id.ID
 	finalResponse.Data.QuerySQL = query
@@ -127,6 +127,10 @@ func (conn *ClickzettaConn) execInternal(query string, id jobId, bindings []driv
 			continue
 		}
 		hints[hintKV[0]] = hintKV[1]
+	}
+	flags := GetDriverFlags(ctx)
+	for k, v := range flags {
+		hints[k] = v
 	}
 
 	isSeprate := false
