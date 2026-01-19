@@ -1,18 +1,14 @@
 package goclickzetta
 
 import (
-	"context"
 	"encoding/base64"
 	"net/http"
-	"net/url"
 	"reflect"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/aliyun/aliyun-oss-go-sdk/oss"
 	"github.com/apache/arrow/go/v12/arrow/ipc"
-	"github.com/tencentyun/cos-go-sdk-v5"
 )
 
 type queryDataType int
@@ -20,13 +16,6 @@ type queryDataType int
 const (
 	Memory queryDataType = iota
 	File   queryDataType = iota
-)
-
-type objectStorageType int
-
-const (
-	OSS objectStorageType = iota
-	COS objectStorageType = iota
 )
 
 type httpResponseMessage struct {
@@ -99,6 +88,7 @@ type objectStorageLocation struct {
 	OSSInternalEndpoint    string             `json:"ossInternalEndpoint"`
 	COSObjectStorageRegion string             `json:"objectStorageRegion"`
 	LocationFiles          []locationFileInfo `json:"locationFiles"`
+	PresignedUrls          []string           `json:"presignedUrls"`
 }
 
 type locationFileInfo struct {
@@ -115,12 +105,8 @@ type execResponseData struct {
 	Data []interface{}
 	// query data type
 	DataType queryDataType
-	// query data file list
-	FileList []string
-	// query object storage type
-	ObjectStorageType   objectStorageType
-	OSSBucket           *oss.Bucket
-	COSClient           *cos.Client
+	// query data file list (presigned URLs)
+	FileList            []string
 	CurrentFileIndex    int
 	MemoryRead          bool
 	Schema              []execResponseColumnType
@@ -145,55 +131,8 @@ func (qd *execResponseData) init() error {
 		qd.DataType = File
 		loc := qd.HTTPResponseMessage.HttpResponseMessageResultSet.ObjectStorageLocation
 		qd.FileList = make([]string, 0)
-		for _, file := range loc.Location {
+		for _, file := range loc.PresignedUrls {
 			qd.FileList = append(qd.FileList, file)
-		}
-		if loc.FileSystem == "OSS" {
-			qd.ObjectStorageType = OSS
-			option := oss.ClientOption(oss.SecurityToken(loc.Token))
-			client, err := oss.New(loc.OSSEndpoint, loc.ID, loc.Secret, option)
-			if err != nil {
-				logger.WithContext(nil).Errorf("error: %v", err)
-				return err
-			}
-			bucketName := strings.SplitN(qd.FileList[0], "/", 4)[2]
-
-			bucket, err := client.Bucket(bucketName)
-			if err != nil {
-				logger.WithContext(nil).Errorf("error: %v", err)
-				return err
-			}
-			qd.OSSBucket = bucket
-		} else if loc.FileSystem == "COS" {
-			qd.ObjectStorageType = COS
-			fileInfo := strings.SplitN(loc.Location[0], "/", 4)
-			cosUrl := "https://" + fileInfo[2] + ".cos." + loc.COSObjectStorageRegion + ".myqcloud.com"
-			url, err := url.Parse(cosUrl)
-			if err != nil {
-				logger.WithContext(nil).Errorf("error: %v", err)
-				return err
-			}
-			client := cos.NewClient(&cos.BaseURL{BucketURL: url}, &http.Client{
-				Transport: &cos.AuthorizationTransport{
-					SecretID:     loc.ID,
-					SecretKey:    loc.Secret,
-					SessionToken: loc.Token,
-				},
-			})
-			if err != nil {
-				logger.WithContext(nil).Errorf("error: %v", err)
-				return err
-			}
-			qd.COSClient = client
-		} else {
-			return &ClickzettaError{
-				Number:         -1,
-				Message:        "object storage type is not supported",
-				SQLState:       "",
-				QueryID:        "",
-				MessageArgs:    make([]interface{}, 0),
-				IncludeQueryID: false,
-			}
 		}
 	}
 	return nil
@@ -331,7 +270,7 @@ func (qd *execResponseData) read() error {
 		qd.RowCount = int64(len(qd.Data))
 		return nil
 	} else if qd.DataType == File {
-		if qd.FileList == nil || len(qd.FileList) == 0 {
+		if len(qd.FileList) == 0 {
 			return &ClickzettaError{
 				Number:         -1,
 				Message:        "object storage file list is empty",
@@ -345,45 +284,56 @@ func (qd *execResponseData) read() error {
 		if qd.CurrentFileIndex >= len(qd.FileList) {
 			return nil
 		}
-		fileName := qd.FileList[qd.CurrentFileIndex]
-		fileInfo := strings.SplitN(fileName, "/", 4)
+		presignedUrl := qd.FileList[qd.CurrentFileIndex]
 		qd.CurrentFileIndex++
-		if qd.ObjectStorageType == OSS {
-			stream, err := qd.OSSBucket.GetObject(fileInfo[3])
-			if err != nil {
-				logger.WithContext(nil).Errorf("error: %v", err)
-				return err
-			}
-			reader, err := ipc.NewReader(stream)
-			if err != nil {
-				logger.WithContext(nil).Errorf("error: %v", err)
-				return err
-			}
-			err = arrowToRows(qd, reader)
-			if err != nil {
-				logger.WithContext(nil).Errorf("error: %v", err)
-				return err
-			}
 
-		} else if qd.ObjectStorageType == COS {
-			res, err := qd.COSClient.Object.Get(context.Background(), fileInfo[3], nil)
-			if err != nil {
-				logger.WithContext(nil).Errorf("error: %v", err)
-				return err
-			}
-			reader, err := ipc.NewReader(res.Body)
-			if err != nil {
-				logger.WithContext(nil).Errorf("error: %v", err)
-				return err
-			}
-			err = arrowToRows(qd, reader)
-			if err != nil {
-				logger.WithContext(nil).Errorf("error: %v", err)
-				return err
-			}
-
+		resp, err := http.Get(presignedUrl)
+		if err != nil {
+			logger.WithContext(nil).Errorf("error: %v", err)
+			return err
 		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			logger.WithContext(nil).Errorf("failed to download file, status code: %d", resp.StatusCode)
+			return &ClickzettaError{
+				Number:         -1,
+				Message:        "failed to download file from presigned url",
+				SQLState:       "",
+				QueryID:        "",
+				MessageArgs:    make([]interface{}, 0),
+				IncludeQueryID: false,
+			}
+		}
+
+		reader, err := ipc.NewReader(resp.Body)
+		if err != nil {
+			logger.WithContext(nil).Errorf("error: %v", err)
+			return err
+		}
+		err = arrowToRows(qd, reader)
+		if err != nil {
+			logger.WithContext(nil).Errorf("error: %v", err)
+			return err
+		}
+
 		qd.RowCount = qd.RowCount + int64(len(qd.Data))
+	}
+	return nil
+}
+
+// GetFileURLs returns the list of presigned URLs for lazy loading
+func (qd *execResponseData) GetFileURLs() []string {
+	if qd.DataType == File {
+		return qd.FileList
+	}
+	return nil
+}
+
+// GetMemoryDataChunks returns the list of base64 encoded data chunks for lazy loading
+func (qd *execResponseData) GetMemoryDataChunks() []string {
+	if qd.DataType == Memory {
+		return qd.HTTPResponseMessage.HttpResponseMessageResultSet.MemoryData.Data
 	}
 	return nil
 }

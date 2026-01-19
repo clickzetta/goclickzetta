@@ -19,6 +19,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/apache/arrow/go/v12/arrow/array"
 	"github.com/clickzetta/goclickzetta/protos/bulkload/ingestion"
 	"github.com/clickzetta/goclickzetta/protos/bulkload/util"
 	"github.com/golang/protobuf/jsonpb"
@@ -109,6 +110,8 @@ func (conn *ClickzettaConn) execInternal(ctx context.Context, query string, id j
 	hints := make(map[string]interface{})
 	hints["cz.sql.adhoc.result.type"] = "embedded"
 	hints["cz.sql.adhoc.default.format"] = "arrow"
+	hints["cz.sql.job.result.file.presigned.url.enabled"] = "true"
+	hints["cz.sql.job.result.file.presigned.url.ttl"] = "3600"
 	sdkJobTimeout := 0
 	multiQueries := splitSQL(query)
 
@@ -547,6 +550,66 @@ func (conn *ClickzettaConn) QueryContext(
 	}
 
 	return rows, nil
+}
+
+func (conn *ClickzettaConn) QueryArrowStream(ctx context.Context, query string, args []driver.NamedValue) (array.RecordReader, error) {
+	logger.WithContext(ctx).Infof("QueryContext: %#v, %v", query, args)
+	if conn.internal == nil {
+		return nil, driver.ErrBadConn
+	}
+	data, err := conn.exec(ctx, query, false, false, false, args)
+	if err != nil {
+		logger.WithContext(ctx).Errorf("exec sql error: %v", err)
+		return nil, err
+	}
+	if !data.Success {
+		return nil, &ClickzettaError{
+			Message:  data.Message,
+			SQLState: "FAILED",
+			QueryID:  data.Data.JobId,
+		}
+	}
+
+	err = data.Data.init()
+	if err != nil {
+		logger.WithContext(ctx).Errorf("init response data error: %v", err)
+		return nil, err
+	}
+
+	// Use LazyStreamingReader for File type
+	if data.Data.DataType == File {
+		urls := data.Data.GetFileURLs()
+		if len(urls) == 0 {
+			return nil, &ClickzettaError{
+				Message:  "no data files available",
+				SQLState: "EMPTY",
+				QueryID:  data.Data.JobId,
+			}
+		}
+		lazyReader, err := NewLazyStreamingReader(urls)
+		if err != nil {
+			logger.WithContext(ctx).Errorf("create lazy streaming reader error: %v", err)
+			return nil, err
+		}
+		return lazyReader, nil
+	}
+
+	// Use LazyMemoryReader for Memory type
+	chunks := data.Data.GetMemoryDataChunks()
+	if len(chunks) == 0 {
+		return nil, &ClickzettaError{
+			Message:  "no data available",
+			SQLState: "EMPTY",
+			QueryID:  data.Data.JobId,
+		}
+	}
+	memoryReader, err := NewLazyMemoryReader(chunks)
+	if err != nil {
+		logger.WithContext(ctx).Errorf("create lazy memory reader error: %v", err)
+		return nil, err
+	}
+
+	return memoryReader, nil
 }
 
 func (conn *ClickzettaConn) queryContextInternal(
