@@ -8,8 +8,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/apache/arrow/go/v12/arrow"
-	"github.com/apache/arrow/go/v12/arrow/ipc"
+	"github.com/apache/arrow-go/v18/arrow"
+	"github.com/apache/arrow-go/v18/arrow/ipc"
 )
 
 type ClickzettaRows interface {
@@ -220,6 +220,13 @@ func (r *LazyStreamingReader) Record() arrow.Record {
 	return r.currentReader.Record()
 }
 
+func (r *LazyStreamingReader) RecordBatch() arrow.Record {
+	if r.closed || r.currentReader == nil {
+		return nil
+	}
+	return r.currentReader.Record()
+}
+
 func (r *LazyStreamingReader) Err() error {
 	return r.err
 }
@@ -335,6 +342,13 @@ func (r *LazyMemoryReader) Next() bool {
 }
 
 func (r *LazyMemoryReader) Record() arrow.Record {
+	if r.closed || r.currentReader == nil {
+		return nil
+	}
+	return r.currentReader.Record()
+}
+
+func (r *LazyMemoryReader) RecordBatch() arrow.Record {
 	if r.closed || r.currentReader == nil {
 		return nil
 	}

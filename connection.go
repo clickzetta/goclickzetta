@@ -19,7 +19,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/apache/arrow/go/v12/arrow/array"
+	"github.com/apache/arrow-go/v18/arrow/array"
 	"github.com/clickzetta/goclickzetta/protos/bulkload/ingestion"
 	"github.com/clickzetta/goclickzetta/protos/bulkload/util"
 	"github.com/golang/protobuf/jsonpb"

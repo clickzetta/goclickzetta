@@ -2,7 +2,7 @@ module github.com/clickzetta/test
 
 go 1.21.6
 
-require github.com/clickzetta/goclickzetta v0.0.6
+require github.com/clickzetta/goclickzetta v0.0.12
 
 require (
 	github.com/jinzhu/inflection v1.0.0 // indirect
@@ -13,7 +13,7 @@ require (
 	github.com/JohnCGriffin/overflow v0.0.0-20211019200055-46fa312c352c // indirect
 	github.com/aliyun/aliyun-oss-go-sdk v2.2.6+incompatible // indirect
 	github.com/andybalholm/brotli v1.0.4 // indirect
-	github.com/apache/arrow/go/v12 v12.0.1
+	github.com/apache/arrow-go/v18 v18.0.0
 	github.com/apache/thrift v0.16.0 // indirect
 	github.com/clbanning/mxj v1.8.4 // indirect
 	github.com/goccy/go-json v0.9.11 // indirect
@@ -49,3 +49,5 @@ require (
 	google.golang.org/protobuf v1.31.0 // indirect
 	gorm.io/gorm v1.25.12
 )
+
+replace github.com/clickzetta/goclickzetta v0.0.12 => /Users/calf/Documents/code/go/projects/goclickzetta
