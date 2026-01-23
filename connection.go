@@ -698,6 +698,35 @@ func (conn *ClickzettaConn) Close() (err error) {
 	return nil
 }
 
+// SetSchema sets the current schema for the connection
+func (conn *ClickzettaConn) SetSchema(schema string) {
+	conn.cfg.Schema = schema
+}
+
+// GetSchema returns the current schema of the connection
+func (conn *ClickzettaConn) GetSchema() string {
+	return conn.cfg.Schema
+}
+
+// SetCatalog sets the current catalog for the connection
+func (conn *ClickzettaConn) SetCatalog(catalog string) {
+	if conn.cfg.Params == nil {
+		conn.cfg.Params = make(map[string]*string)
+	}
+	conn.cfg.Params["catalog"] = &catalog
+}
+
+// GetCatalog returns the current catalog of the connection
+func (conn *ClickzettaConn) GetCatalog() string {
+	if conn.cfg.Params == nil {
+		return conn.cfg.Workspace
+	}
+	if v, ok := conn.cfg.Params["catalog"]; ok && v != nil {
+		return *v
+	}
+	return conn.cfg.Workspace
+}
+
 func (conn *ClickzettaConn) PrepareContext(
 	ctx context.Context,
 	query string) (
