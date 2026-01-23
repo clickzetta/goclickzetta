@@ -376,3 +376,94 @@ func (r *LazyMemoryReader) Release() {
 		r.currentReader = nil
 	}
 }
+
+// EmptyRecordReader is a RecordReader that returns no records
+// Used when query returns empty result set
+type EmptyRecordReader struct {
+	schema *arrow.Schema
+	closed bool
+}
+
+// NewEmptyRecordReader creates a new empty record reader with the given schema
+func NewEmptyRecordReader(schema *arrow.Schema) *EmptyRecordReader {
+	return &EmptyRecordReader{
+		schema: schema,
+		closed: false,
+	}
+}
+
+// NewEmptyRecordReaderFromFields creates a new empty record reader from schema fields
+func NewEmptyRecordReaderFromFields(fields []execResponseColumnType) *EmptyRecordReader {
+	arrowFields := make([]arrow.Field, len(fields))
+	for i, f := range fields {
+		arrowFields[i] = arrow.Field{
+			Name:     f.Name,
+			Type:     mapClickzettaTypeToArrow(f.Type, f.Precision, f.Scale),
+			Nullable: f.Nullable,
+		}
+	}
+	schema := arrow.NewSchema(arrowFields, nil)
+	return &EmptyRecordReader{
+		schema: schema,
+		closed: false,
+	}
+}
+
+func (r *EmptyRecordReader) Schema() *arrow.Schema {
+	return r.schema
+}
+
+func (r *EmptyRecordReader) Next() bool {
+	return false
+}
+
+func (r *EmptyRecordReader) Record() arrow.Record {
+	return nil
+}
+
+func (r *EmptyRecordReader) RecordBatch() arrow.Record {
+	return nil
+}
+
+func (r *EmptyRecordReader) Err() error {
+	return nil
+}
+
+func (r *EmptyRecordReader) Retain() {
+}
+
+func (r *EmptyRecordReader) Release() {
+	r.closed = true
+}
+
+// mapClickzettaTypeToArrow maps Clickzetta type to Arrow type
+func mapClickzettaTypeToArrow(typeName string, precision, scale int64) arrow.DataType {
+	switch typeName {
+	case "BOOLEAN":
+		return arrow.FixedWidthTypes.Boolean
+	case "TINYINT":
+		return arrow.PrimitiveTypes.Int8
+	case "SMALLINT":
+		return arrow.PrimitiveTypes.Int16
+	case "INT", "INTEGER":
+		return arrow.PrimitiveTypes.Int32
+	case "BIGINT":
+		return arrow.PrimitiveTypes.Int64
+	case "FLOAT":
+		return arrow.PrimitiveTypes.Float32
+	case "DOUBLE":
+		return arrow.PrimitiveTypes.Float64
+	case "DECIMAL":
+		return &arrow.Decimal128Type{Precision: int32(precision), Scale: int32(scale)}
+	case "STRING", "VARCHAR", "CHAR":
+		return arrow.BinaryTypes.String
+	case "BINARY", "VARBINARY":
+		return arrow.BinaryTypes.Binary
+	case "DATE":
+		return arrow.FixedWidthTypes.Date32
+	case "TIMESTAMP", "TIMESTAMP_LTZ", "TIMESTAMP_NTZ":
+		return arrow.FixedWidthTypes.Timestamp_us
+	default:
+		return arrow.BinaryTypes.String
+	}
+}

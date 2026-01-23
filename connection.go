@@ -168,10 +168,14 @@ func (conn *ClickzettaConn) execInternal(ctx context.Context, query string, id j
 
 	schema := conn.cfg.Schema
 	sqls := append(make([]string, 0), query)
+	catalog := conn.cfg.Workspace
+	if v, ok := conn.cfg.Params["catalog"]; ok && v != nil {
+		catalog = *v
+	}
 	sqljob := sqlJob{
 		Query: sqls,
 		DefaultNamespace: []string{
-			conn.cfg.Workspace,
+			catalog,
 			schema,
 		},
 		SQLJobConfig: &sqlConfig,
@@ -460,6 +464,35 @@ func (conn *ClickzettaConn) Close() (err error) {
 	return nil
 }
 
+// SetSchema sets the current schema for the connection
+func (conn *ClickzettaConn) SetSchema(schema string) {
+	conn.cfg.Schema = schema
+}
+
+// GetSchema returns the current schema of the connection
+func (conn *ClickzettaConn) GetSchema() string {
+	return conn.cfg.Schema
+}
+
+// SetCatalog sets the current catalog for the connection
+func (conn *ClickzettaConn) SetCatalog(catalog string) {
+	if conn.cfg.Params == nil {
+		conn.cfg.Params = make(map[string]*string)
+	}
+	conn.cfg.Params["catalog"] = &catalog
+}
+
+// GetCatalog returns the current catalog of the connection
+func (conn *ClickzettaConn) GetCatalog() string {
+	if conn.cfg.Params == nil {
+		return conn.cfg.Workspace
+	}
+	if v, ok := conn.cfg.Params["catalog"]; ok && v != nil {
+		return *v
+	}
+	return conn.cfg.Workspace
+}
+
 func (conn *ClickzettaConn) PrepareContext(
 	ctx context.Context,
 	query string) (
@@ -580,11 +613,8 @@ func (conn *ClickzettaConn) QueryArrowStream(ctx context.Context, query string, 
 	if data.Data.DataType == File {
 		urls := data.Data.GetFileURLs()
 		if len(urls) == 0 {
-			return nil, &ClickzettaError{
-				Message:  "no data files available",
-				SQLState: "EMPTY",
-				QueryID:  data.Data.JobId,
-			}
+			// Return empty reader instead of error for empty result set
+			return NewEmptyRecordReaderFromFields(data.Data.Schema), nil
 		}
 		lazyReader, err := NewLazyStreamingReader(urls)
 		if err != nil {
@@ -597,11 +627,8 @@ func (conn *ClickzettaConn) QueryArrowStream(ctx context.Context, query string, 
 	// Use LazyMemoryReader for Memory type
 	chunks := data.Data.GetMemoryDataChunks()
 	if len(chunks) == 0 {
-		return nil, &ClickzettaError{
-			Message:  "no data available",
-			SQLState: "EMPTY",
-			QueryID:  data.Data.JobId,
-		}
+		// Return empty reader instead of error for empty result set
+		return NewEmptyRecordReaderFromFields(data.Data.Schema), nil
 	}
 	memoryReader, err := NewLazyMemoryReader(chunks)
 	if err != nil {
