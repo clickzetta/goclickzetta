@@ -291,7 +291,7 @@ func getArrowTypeAndBuilder(mem memory.Allocator, value interface{}, fieldName s
 	case uint32:
 		return makeFieldWithID(fieldName, arrow.PrimitiveTypes.Uint32, true, fieldIDGen.next()), array.NewUint32Builder(mem)
 	case uint64:
-		return makeFieldWithID(fieldName, arrow.PrimitiveTypes.Uint64, true, fieldIDGen.next()), array.NewUint64Builder(mem)
+		return makeFieldWithID(fieldName, arrow.PrimitiveTypes.Int64, true, fieldIDGen.next()), array.NewInt64Builder(mem)
 	case float32:
 		return makeFieldWithID(fieldName, arrow.PrimitiveTypes.Float32, true, fieldIDGen.next()), array.NewFloat32Builder(mem)
 	case float64:
@@ -336,9 +336,9 @@ func getArrowTypeAndBuilder(mem memory.Allocator, value interface{}, fieldName s
 		return makeFieldWithID(fieldName, listType, true, listFieldID), array.NewListBuilder(mem, arrow.PrimitiveTypes.Uint32)
 	case []uint64:
 		listFieldID := fieldIDGen.next()
-		itemField := makeFieldWithID("item", arrow.PrimitiveTypes.Uint64, true, fieldIDGen.next())
+		itemField := makeFieldWithID("item", arrow.PrimitiveTypes.Int64, true, fieldIDGen.next())
 		listType := arrow.ListOfField(itemField)
-		return makeFieldWithID(fieldName, listType, true, listFieldID), array.NewListBuilder(mem, arrow.PrimitiveTypes.Uint64)
+		return makeFieldWithID(fieldName, listType, true, listFieldID), array.NewListBuilder(mem, arrow.PrimitiveTypes.Int64)
 	case []float32:
 		listFieldID := fieldIDGen.next()
 		itemField := makeFieldWithID("item", arrow.PrimitiveTypes.Float32, true, fieldIDGen.next())
@@ -447,6 +447,7 @@ func appendValue(builder array.Builder, value interface{}) {
 		case int64:
 			b.Append(v)
 		case int:
+		case uint64:
 			b.Append(int64(v))
 		default:
 			b.AppendNull()
