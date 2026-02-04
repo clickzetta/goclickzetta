@@ -186,6 +186,17 @@ func arrowValueToInterface(arr arrow.Array, index int) interface{} {
 		return data.Value(index).ToTime(arrow.Microsecond)
 	case *array.Date32:
 		return time.Unix(int64(data.Value(index))*86400, 0).UTC()
+	case *array.Decimal128:
+		num := data.Value(index)
+		decType := data.DataType().(*arrow.Decimal128Type)
+		if decType.Scale == 0 {
+			if decType.Precision == 20 {
+				return num.LowBits()
+			}
+			return num.BigInt()
+		}
+		divisor := new(big.Float).SetInt(new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(decType.Scale)), nil))
+		return decimalToBigFloat(num, divisor)
 	case *array.List:
 	case *array.LargeList:
 		start, end := data.ValueOffsets(index)
@@ -243,6 +254,109 @@ func arrowMapToGoMap(data *array.Map, index int) map[string]interface{} {
 	return result
 }
 
+// arrowMapToTypedGoMap converts Arrow Map to a typed Go map based on value type
+// Returns map[string]string for string values, map[string]int64 for int values, etc.
+func arrowMapToTypedGoMap(data *array.Map, index int) interface{} {
+	if data.IsNull(index) {
+		return nil
+	}
+
+	start, end := data.ValueOffsets(index)
+	keys := data.Keys()
+	items := data.Items()
+
+	// determine the type based on items array type
+	switch itemData := items.(type) {
+	case *array.String:
+		result := make(map[string]string, end-start)
+		for j := int(start); j < int(end); j++ {
+			keyStr := getMapKeyString(keys, j)
+			if !itemData.IsNull(j) {
+				result[keyStr] = itemData.Value(j)
+			} else {
+				result[keyStr] = ""
+			}
+		}
+		return result
+	case *array.Int64:
+		result := make(map[string]int64, end-start)
+		for j := int(start); j < int(end); j++ {
+			keyStr := getMapKeyString(keys, j)
+			if !itemData.IsNull(j) {
+				result[keyStr] = itemData.Value(j)
+			}
+		}
+		return result
+	case *array.Int32:
+		result := make(map[string]int32, end-start)
+		for j := int(start); j < int(end); j++ {
+			keyStr := getMapKeyString(keys, j)
+			if !itemData.IsNull(j) {
+				result[keyStr] = itemData.Value(j)
+			}
+		}
+		return result
+	case *array.Float64:
+		result := make(map[string]float64, end-start)
+		for j := int(start); j < int(end); j++ {
+			keyStr := getMapKeyString(keys, j)
+			if !itemData.IsNull(j) {
+				result[keyStr] = itemData.Value(j)
+			}
+		}
+		return result
+	case *array.Boolean:
+		result := make(map[string]bool, end-start)
+		for j := int(start); j < int(end); j++ {
+			keyStr := getMapKeyString(keys, j)
+			if !itemData.IsNull(j) {
+				result[keyStr] = itemData.Value(j)
+			}
+		}
+		return result
+	case *array.Decimal128:
+		decType := itemData.DataType().(*arrow.Decimal128Type)
+		// check if this is decimal(20, 0) which should be converted to map[...]uint64
+		if decType.Precision == 20 && decType.Scale == 0 {
+			// check key type for map[uint64]uint64
+			if keyDecimal, ok := keys.(*array.Decimal128); ok {
+				keyDecType := keyDecimal.DataType().(*arrow.Decimal128Type)
+				if keyDecType.Precision == 20 && keyDecType.Scale == 0 {
+					result := make(map[uint64]uint64, end-start)
+					for j := int(start); j < int(end); j++ {
+						if !keyDecimal.IsNull(j) && !itemData.IsNull(j) {
+							result[keyDecimal.Value(j).LowBits()] = itemData.Value(j).LowBits()
+						}
+					}
+					return result
+				}
+			}
+			// fallback to map[string]uint64
+			result := make(map[string]uint64, end-start)
+			for j := int(start); j < int(end); j++ {
+				keyStr := getMapKeyString(keys, j)
+				if !itemData.IsNull(j) {
+					result[keyStr] = itemData.Value(j).LowBits()
+				}
+			}
+			return result
+		}
+		// fallback to map[string]interface{}
+		return arrowMapToGoMap(data, index)
+	default:
+		// fallback to map[string]interface{}
+		return arrowMapToGoMap(data, index)
+	}
+}
+
+// getMapKeyString extracts string key from Arrow array
+func getMapKeyString(keys arrow.Array, index int) string {
+	if strKeys, ok := keys.(*array.String); ok {
+		return strKeys.Value(index)
+	}
+	return fmt.Sprintf("%v", arrowValueToInterface(keys, index))
+}
+
 // arrowStructToGoMap 将 Arrow Struct 转换为 Go map
 func arrowStructToGoMap(data *array.Struct, index int) map[string]interface{} {
 	if data.IsNull(index) {
@@ -259,6 +373,84 @@ func arrowStructToGoMap(data *array.Struct, index int) map[string]interface{} {
 	}
 
 	return result
+}
+
+// convertListToTypedSlice converts Arrow list values to a typed Go slice
+// Returns []string for string arrays, []int64 for int arrays, etc.
+func convertListToTypedSlice(listValues arrow.Array, start, end int) interface{} {
+	if listValues == nil || start >= end {
+		return []interface{}{}
+	}
+
+	switch data := listValues.(type) {
+	case *array.String:
+		result := make([]string, end-start)
+		for j := start; j < end; j++ {
+			if data.IsNull(j) {
+				result[j-start] = ""
+			} else {
+				result[j-start] = data.Value(j)
+			}
+		}
+		return result
+	case *array.Int64:
+		result := make([]int64, end-start)
+		for j := start; j < end; j++ {
+			if !data.IsNull(j) {
+				result[j-start] = data.Value(j)
+			}
+		}
+		return result
+	case *array.Int32:
+		result := make([]int32, end-start)
+		for j := start; j < end; j++ {
+			if !data.IsNull(j) {
+				result[j-start] = data.Value(j)
+			}
+		}
+		return result
+	case *array.Float64:
+		result := make([]float64, end-start)
+		for j := start; j < end; j++ {
+			if !data.IsNull(j) {
+				result[j-start] = data.Value(j)
+			}
+		}
+		return result
+	case *array.Boolean:
+		result := make([]bool, end-start)
+		for j := start; j < end; j++ {
+			if !data.IsNull(j) {
+				result[j-start] = data.Value(j)
+			}
+		}
+		return result
+	case *array.Decimal128:
+		decType := data.DataType().(*arrow.Decimal128Type)
+		// check if this is decimal(20, 0) which should be converted to []uint64
+		if decType.Precision == 20 && decType.Scale == 0 {
+			result := make([]uint64, end-start)
+			for j := start; j < end; j++ {
+				if !data.IsNull(j) {
+					result[j-start] = data.Value(j).LowBits()
+				}
+			}
+			return result
+		}
+		// fallback to []interface{} for other decimal types
+		result := make([]interface{}, end-start)
+		for j := start; j < end; j++ {
+			result[j-start] = arrowValueToInterface(listValues, j)
+		}
+		return result
+	default:
+		// fallback to []interface{} for unsupported types
+		result := make([]interface{}, end-start)
+		for j := start; j < end; j++ {
+			result[j-start] = arrowValueToInterface(listValues, j)
+		}
+		return result
+	}
 }
 
 func processIntValues(srcValue arrow.Array, destcol []interface{}, scale int64, higherPrecision bool) {
@@ -331,10 +523,16 @@ func arrowToValue(
 				divisor = new(big.Float).SetInt(new(big.Int).Exp(big.NewInt(10), big.NewInt(srcColumnMeta.Scale), nil))
 			}
 
+			// check if this is decimal(20, 0) which should be converted to uint64
+			isUint64Type := srcColumnMeta.Precision == 20 && srcColumnMeta.Scale == 0
+
 			for i, num := range data.Values() {
 				if !srcValue.IsNull(i) {
 					if srcColumnMeta.Scale == 0 {
-						if higherPrecision {
+						if isUint64Type {
+							// convert to uint64
+							destcol[i] = num.LowBits()
+						} else if higherPrecision {
 							destcol[i] = num.BigInt()
 						} else {
 							destcol[i] = num.ToString(0)
@@ -361,11 +559,7 @@ func arrowToValue(
 				if !srcValue.IsNull(i) {
 					start, end := data.ValueOffsets(i)
 					listValues := data.ListValues()
-					result := make([]interface{}, end-start)
-					for j := int(start); j < int(end); j++ {
-						result[j-int(start)] = arrowValueToInterface(listValues, j)
-					}
-					destcol[i] = result
+					destcol[i] = convertListToTypedSlice(listValues, int(start), int(end))
 				}
 			}
 		case *array.LargeList:
@@ -373,11 +567,7 @@ func arrowToValue(
 				if !srcValue.IsNull(i) {
 					start, end := data.ValueOffsets(i)
 					listValues := data.ListValues()
-					result := make([]interface{}, end-start)
-					for j := int(start); j < int(end); j++ {
-						result[j-int(start)] = arrowValueToInterface(listValues, j)
-					}
-					destcol[i] = result
+					destcol[i] = convertListToTypedSlice(listValues, int(start), int(end))
 				}
 			}
 		case *array.FixedSizeList:
@@ -387,11 +577,7 @@ func arrowToValue(
 					start := i * int(listSize)
 					end := start + int(listSize)
 					listValues := data.ListValues()
-					result := make([]interface{}, listSize)
-					for j := start; j < end; j++ {
-						result[j-start] = arrowValueToInterface(listValues, j)
-					}
-					destcol[i] = result
+					destcol[i] = convertListToTypedSlice(listValues, start, end)
 				}
 			}
 		default:
@@ -399,11 +585,11 @@ func arrowToValue(
 		}
 		return err
 	case MAP:
-		// convert Arrow Map to Go map[string]interface{}
+		// convert Arrow Map to typed Go map
 		data := srcValue.(*array.Map)
 		for i := range destcol {
 			if !srcValue.IsNull(i) {
-				destcol[i] = arrowMapToGoMap(data, i)
+				destcol[i] = arrowMapToTypedGoMap(data, i)
 			}
 		}
 		return err

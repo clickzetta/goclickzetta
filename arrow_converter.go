@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"fmt"
+	"math/big"
 	"reflect"
 	"runtime"
 	"sort"
@@ -13,8 +14,10 @@ import (
 
 	"github.com/apache/arrow/go/v12/arrow"
 	"github.com/apache/arrow/go/v12/arrow/array"
+	"github.com/apache/arrow/go/v12/arrow/decimal128"
 	"github.com/apache/arrow/go/v12/arrow/ipc"
 	"github.com/apache/arrow/go/v12/arrow/memory"
+	"github.com/shopspring/decimal"
 )
 
 // convertBindingsToArrowBinary convert bindings to Arrow IPC binary data
@@ -212,10 +215,14 @@ func createBuilderFromType(mem memory.Allocator, dt arrow.DataType) array.Builde
 		return array.NewTimestampBuilder(mem, t)
 	case *arrow.ListType:
 		return array.NewListBuilder(mem, t.Elem())
+	case *arrow.MapType:
+		return array.NewMapBuilder(mem, t.KeyType(), t.ItemType(), false)
 	case *arrow.StructType:
 		return array.NewStructBuilder(mem, t)
 	case *arrow.NullType:
 		return array.NewNullBuilder(mem)
+	case *arrow.Decimal128Type:
+		return array.NewDecimal128Builder(mem, t)
 	default:
 		// Fallback for unknown types (should not happen with correct inference)
 		return array.NewStringBuilder(mem)
@@ -291,7 +298,9 @@ func getArrowTypeAndBuilder(mem memory.Allocator, value interface{}, fieldName s
 	case uint32:
 		return makeFieldWithID(fieldName, arrow.PrimitiveTypes.Uint32, true, fieldIDGen.next()), array.NewUint32Builder(mem)
 	case uint64:
-		return makeFieldWithID(fieldName, arrow.PrimitiveTypes.Int64, true, fieldIDGen.next()), array.NewInt64Builder(mem)
+		// uint64 max value is 18446744073709551615 (20 digits), use decimal(20, 0)
+		decType := &arrow.Decimal128Type{Precision: 20, Scale: 0}
+		return makeFieldWithID(fieldName, decType, true, fieldIDGen.next()), array.NewDecimal128Builder(mem, decType)
 	case float32:
 		return makeFieldWithID(fieldName, arrow.PrimitiveTypes.Float32, true, fieldIDGen.next()), array.NewFloat32Builder(mem)
 	case float64:
@@ -304,6 +313,11 @@ func getArrowTypeAndBuilder(mem memory.Allocator, value interface{}, fieldName s
 		return makeFieldWithID(fieldName, arrow.FixedWidthTypes.Timestamp_us, true, fieldIDGen.next()), array.NewTimestampBuilder(mem, &arrow.TimestampType{Unit: arrow.Microsecond})
 	case sql.NullTime:
 		return makeFieldWithID(fieldName, arrow.FixedWidthTypes.Timestamp_us, true, fieldIDGen.next()), array.NewTimestampBuilder(mem, &arrow.TimestampType{Unit: arrow.Microsecond})
+	case decimal.Decimal:
+		// infer precision and scale from the decimal value
+		precision, scale := inferDecimalPrecisionScale(v)
+		decType := &arrow.Decimal128Type{Precision: precision, Scale: scale}
+		return makeFieldWithID(fieldName, decType, true, fieldIDGen.next()), array.NewDecimal128Builder(mem, decType)
 	case []int, []int64:
 		listFieldID := fieldIDGen.next()
 		itemField := makeFieldWithID("item", arrow.PrimitiveTypes.Int64, true, fieldIDGen.next())
@@ -336,9 +350,10 @@ func getArrowTypeAndBuilder(mem memory.Allocator, value interface{}, fieldName s
 		return makeFieldWithID(fieldName, listType, true, listFieldID), array.NewListBuilder(mem, arrow.PrimitiveTypes.Uint32)
 	case []uint64:
 		listFieldID := fieldIDGen.next()
-		itemField := makeFieldWithID("item", arrow.PrimitiveTypes.Int64, true, fieldIDGen.next())
+		decType := &arrow.Decimal128Type{Precision: 20, Scale: 0}
+		itemField := makeFieldWithID("item", decType, true, fieldIDGen.next())
 		listType := arrow.ListOfField(itemField)
-		return makeFieldWithID(fieldName, listType, true, listFieldID), array.NewListBuilder(mem, arrow.PrimitiveTypes.Int64)
+		return makeFieldWithID(fieldName, listType, true, listFieldID), array.NewListBuilder(mem, decType)
 	case []float32:
 		listFieldID := fieldIDGen.next()
 		itemField := makeFieldWithID("item", arrow.PrimitiveTypes.Float32, true, fieldIDGen.next())
@@ -380,29 +395,40 @@ func getArrowTypeAndBuilder(mem memory.Allocator, value interface{}, fieldName s
 		listType := arrow.ListOfField(itemField)
 		return makeFieldWithID(fieldName, listType, true, listFieldID), array.NewListBuilder(mem, itemField.Type)
 	case map[string]interface{}:
-		// assign ID to struct field
-		structFieldID := fieldIDGen.next()
+		// convert to Arrow Map type
+		mapFieldID := fieldIDGen.next()
 
-		// process map type, convert to Arrow Struct
-		structFields := make([]arrow.Field, 0, len(v))
-
-		// sort by key to ensure consistent order
-		keys := make([]string, 0, len(v))
-		for k := range v {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-
-		// create corresponding field for each key (recursively infer type, each nested field also assigns field ID)
-		for _, k := range keys {
-			val := v[k]
-			field, _ := getArrowTypeAndBuilder(mem, val, k, fieldIDGen)
-			structFields = append(structFields, field)
+		// infer value type from the first non-nil value
+		var valueType arrow.DataType = arrow.BinaryTypes.String // default to string
+		for _, val := range v {
+			if val != nil {
+				field, builder := getArrowTypeAndBuilder(mem, val, "value", fieldIDGen)
+				valueType = field.Type
+				builder.Release()
+				break
+			}
 		}
 
-		structType := arrow.StructOf(structFields...)
-		structBuilder := array.NewStructBuilder(mem, structType)
-		return makeFieldWithID(fieldName, structType, true, structFieldID), structBuilder
+		keyField := arrow.Field{Name: "key", Type: arrow.BinaryTypes.String, Nullable: false}
+		valueField := arrow.Field{Name: "value", Type: valueType, Nullable: true}
+		mapType := arrow.MapOf(keyField.Type, valueField.Type)
+		mapBuilder := array.NewMapBuilder(mem, keyField.Type, valueField.Type, false)
+		return makeFieldWithID(fieldName, mapType, true, mapFieldID), mapBuilder
+	case map[string]string:
+		// convert to Arrow Map<String, String> type
+		mapFieldID := fieldIDGen.next()
+
+		mapType := arrow.MapOf(arrow.BinaryTypes.String, arrow.BinaryTypes.String)
+		mapBuilder := array.NewMapBuilder(mem, arrow.BinaryTypes.String, arrow.BinaryTypes.String, false)
+		return makeFieldWithID(fieldName, mapType, true, mapFieldID), mapBuilder
+	case map[uint64]uint64:
+		// convert to Arrow Map<Decimal(20,0), Decimal(20,0)> type
+		mapFieldID := fieldIDGen.next()
+		decType := &arrow.Decimal128Type{Precision: 20, Scale: 0}
+
+		mapType := arrow.MapOf(decType, decType)
+		mapBuilder := array.NewMapBuilder(mem, decType, decType, false)
+		return makeFieldWithID(fieldName, mapType, true, mapFieldID), mapBuilder
 	default:
 		// for unknown type, use String type as fallback (can accept any value, including null)
 		// String type is generic, can convert any type using fmt.Sprintf
@@ -447,7 +473,6 @@ func appendValue(builder array.Builder, value interface{}) {
 		case int64:
 			b.Append(v)
 		case int:
-		case uint64:
 			b.Append(int64(v))
 		default:
 			b.AppendNull()
@@ -514,12 +539,16 @@ func appendValue(builder array.Builder, value interface{}) {
 		}
 	case *array.ListBuilder:
 		appendListValue(b, value)
+	case *array.MapBuilder:
+		appendMapValue(b, value)
 	case *array.StructBuilder:
 		appendStructValue(b, value)
 	case *array.NullBuilder:
 		// NullBuilder can only store null values
 		// if the value is not nil, only append null (because this column is inferred as all null)
 		b.AppendNull()
+	case *array.Decimal128Builder:
+		appendDecimal128Value(b, value)
 	}
 }
 
@@ -562,10 +591,10 @@ func appendStructValue(sb *array.StructBuilder, value interface{}) {
 	}
 
 	sb.Append(true)
+	structType := sb.Type().(*arrow.StructType)
 
 	if m, ok := value.(map[string]interface{}); ok {
 		// add values in the order of struct fields
-		structType := sb.Type().(*arrow.StructType)
 		for i := 0; i < sb.NumField(); i++ {
 			fieldBuilder := sb.FieldBuilder(i)
 			fieldName := structType.Field(i).Name
@@ -577,4 +606,162 @@ func appendStructValue(sb *array.StructBuilder, value interface{}) {
 			}
 		}
 	}
+}
+
+// appendMapValue add map value to MapBuilder
+func appendMapValue(mb *array.MapBuilder, value interface{}) {
+	if value == nil {
+		mb.AppendNull()
+		return
+	}
+
+	mb.Append(true)
+	keyBuilder := mb.KeyBuilder()
+	itemBuilder := mb.ItemBuilder()
+
+	switch m := value.(type) {
+	case map[string]interface{}:
+		kb := keyBuilder.(*array.StringBuilder)
+		// sort keys for consistent order
+		keys := make([]string, 0, len(m))
+		for k := range m {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+
+		for _, k := range keys {
+			kb.Append(k)
+			appendValue(itemBuilder, m[k])
+		}
+	case map[string]string:
+		kb := keyBuilder.(*array.StringBuilder)
+		// sort keys for consistent order
+		keys := make([]string, 0, len(m))
+		for k := range m {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+
+		for _, k := range keys {
+			kb.Append(k)
+			appendValue(itemBuilder, m[k])
+		}
+	case map[uint64]uint64:
+		kb := keyBuilder.(*array.Decimal128Builder)
+		ib := itemBuilder.(*array.Decimal128Builder)
+		// sort keys for consistent order
+		keys := make([]uint64, 0, len(m))
+		for k := range m {
+			keys = append(keys, k)
+		}
+		sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
+
+		for _, k := range keys {
+			kb.Append(uint64ToDecimal128(k))
+			ib.Append(uint64ToDecimal128(m[k]))
+		}
+	}
+}
+
+// appendDecimal128Value appends a decimal or uint64 value to Decimal128Builder
+func appendDecimal128Value(b *array.Decimal128Builder, value interface{}) {
+	if value == nil {
+		b.AppendNull()
+		return
+	}
+
+	switch v := value.(type) {
+	case decimal.Decimal:
+		decType := b.Type().(*arrow.Decimal128Type)
+		targetScale := decType.Scale
+
+		// scale the decimal to match the target scale
+		scaled := v.Shift(targetScale)
+		coef := scaled.Coefficient()
+
+		// convert big.Int to decimal128
+		dec128 := bigIntToDecimal128(coef)
+		b.Append(dec128)
+	case uint64:
+		// convert uint64 to decimal128
+		dec128 := uint64ToDecimal128(v)
+		b.Append(dec128)
+	default:
+		b.AppendNull()
+	}
+}
+
+// uint64ToDecimal128 converts uint64 to arrow decimal128
+func uint64ToDecimal128(v uint64) decimal128.Num {
+	return decimal128.New(0, v)
+}
+
+// bigIntToDecimal128 converts a big.Int to arrow decimal128
+func bigIntToDecimal128(bi *big.Int) decimal128.Num {
+	if bi == nil {
+		return decimal128.New(0, 0)
+	}
+
+	// check if negative
+	negative := bi.Sign() < 0
+	if negative {
+		bi = new(big.Int).Abs(bi)
+	}
+
+	// get bytes in big-endian format
+	bytes := bi.Bytes()
+
+	// convert to low and high uint64
+	var lo, hi uint64
+
+	// process bytes from right to left (big-endian to little-endian conversion)
+	for i := len(bytes) - 1; i >= 0; i-- {
+		bytePos := len(bytes) - 1 - i
+		if bytePos < 8 {
+			lo |= uint64(bytes[i]) << (bytePos * 8)
+		} else if bytePos < 16 {
+			hi |= uint64(bytes[i]) << ((bytePos - 8) * 8)
+		}
+	}
+
+	result := decimal128.New(int64(hi), lo)
+	if negative {
+		result = result.Negate()
+	}
+
+	return result
+}
+
+// inferDecimalPrecisionScale infers precision and scale from a decimal.Decimal value
+func inferDecimalPrecisionScale(d decimal.Decimal) (int32, int32) {
+	// get the scale (number of decimal places)
+	scale := int32(-d.Exponent())
+	if scale < 0 {
+		scale = 0
+	}
+
+	// get the coefficient string to count total digits
+	coef := d.Coefficient()
+	if coef == nil {
+		return 38, scale // default precision
+	}
+
+	// count digits in coefficient
+	coefStr := coef.String()
+	if len(coefStr) > 0 && coefStr[0] == '-' {
+		coefStr = coefStr[1:]
+	}
+	precision := int32(len(coefStr))
+
+	// ensure precision is at least scale + 1
+	if precision < scale+1 {
+		precision = scale + 1
+	}
+
+	// cap at max decimal128 precision (38)
+	if precision > 38 {
+		precision = 38
+	}
+
+	return precision, scale
 }
