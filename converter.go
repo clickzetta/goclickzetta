@@ -378,8 +378,32 @@ func arrowStructToGoMap(data *array.Struct, index int) map[string]interface{} {
 // convertListToTypedSlice converts Arrow list values to a typed Go slice
 // Returns []string for string arrays, []int64 for int arrays, etc.
 func convertListToTypedSlice(listValues arrow.Array, start, end int) interface{} {
-	if listValues == nil || start >= end {
+	if listValues == nil {
 		return []interface{}{}
+	}
+
+	// Handle empty arrays - return typed empty slice based on array type
+	if start >= end {
+		switch listValues.(type) {
+		case *array.String:
+			return []string{}
+		case *array.Int64:
+			return []int64{}
+		case *array.Int32:
+			return []int32{}
+		case *array.Float64:
+			return []float64{}
+		case *array.Boolean:
+			return []bool{}
+		case *array.Decimal128:
+			decType := listValues.DataType().(*arrow.Decimal128Type)
+			if decType.Precision == 20 && decType.Scale == 0 {
+				return []uint64{}
+			}
+			return []interface{}{}
+		default:
+			return []interface{}{}
+		}
 	}
 
 	switch data := listValues.(type) {
