@@ -114,6 +114,17 @@ ${username}:${pwd}@${protocol}(${service}/${schema}?virtualCluster=${vc}&workspa
 * **workspace**: The Clickzetta workspace name.
 * **instanceName**: The Clickzetta instance name.
 
+### Optional Parameters
+
+Additional parameters can be appended to the DSN as query string key-value pairs and are stored in `Config.Params`. Currently supported optional parameters:
+
+* **separate_params**: When set to `true`, INSERT statements will send parameter bindings as Arrow IPC binary data instead of interpolating them into the SQL string. This is recommended for bulk INSERT operations as it avoids SQL injection risks and improves performance. Default value is `false`.
+
+Example DSN with `separate_params`:
+```
+${username}:${pwd}@${protocol}(${service}/${schema}?virtualCluster=${vc}&workspace=${workspace}&instance=${instanceName}&separate_params=true
+```
+
 When User use the Clickzetta driver to execute SQL and write batch data , must construct the DSN.
 
 ## BulkLoad
