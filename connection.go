@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math/rand"
 	"net"
 	"net/http"
 	"net/url"
@@ -86,20 +85,89 @@ func (conn *ClickzettaConn) exec(
 	if !strings.HasSuffix(query, ";") {
 		query += ";"
 	}
-	id := formatJobId()
-	logger.WithContext(ctx).Infof("jobId: %v", id)
-	jobId := jobId{
-		ID:         id,
-		Workspace:  conn.cfg.Workspace,
-		InstanceId: 0,
+
+	// CZLH-57015: at most 1 re-execute with a new jobId (aligned with Java)
+	const maxReExecute = 2
+	for attempt := 0; attempt < maxReExecute; attempt++ {
+		id := formatJobId()
+		logger.WithContext(ctx).Infof("jobId: %v (attempt %d)", id, attempt+1)
+		jid := jobId{
+			ID:         id,
+			Workspace:  conn.cfg.Workspace,
+			InstanceId: 0,
+		}
+
+		res, err := conn.execInternal(ctx, query, jid, bindings)
+		if err != nil {
+			// check if re-execute is needed (CZLH-57015: regenerate jobId and retry)
+			if _, ok := err.(*reExecuteError); ok {
+				logger.WithContext(ctx).Infof("re-executing with new jobId, attempt %d/%d", attempt+1, maxReExecute)
+				continue
+			}
+			logger.WithContext(ctx).Errorf("execInternal error: %v", err)
+			return res, err
+		}
+		return res, nil
 	}
 
-	res, err := conn.execInternal(ctx, query, jobId, bindings)
-	if err != nil {
-		logger.WithContext(ctx).Errorf("execInternal error: %v", err)
-		return res, err
+	return nil, fmt.Errorf("exec failed after %d re-execute attempts", maxReExecute)
+}
+
+// error codes for retry logic, aligned with Java CZStatement
+const (
+	errorCodeNeedReExecute        = "CZLH-57015"
+	errorCodeJobNotExist          = "CZLH-60005"
+	errorCodeJobAlreadyExist      = "CZLH-60007"
+	errorCodeRequestStatusUnknown = "CZLH-60022"
+	errorCodeRequestNotSubmitted  = "CZLH-60023"
+	defaultMaxRetries             = 10
+)
+
+// getMaxRetries returns the configured max retries or the default value
+func (conn *ClickzettaConn) getMaxRetries() int {
+	if conn.cfg.Params != nil {
+		if v, ok := conn.cfg.Params["sdk.query.max.retries"]; ok && v != nil {
+			if n, err := strconv.Atoi(*v); err == nil && n > 0 {
+				return n
+			}
+		}
 	}
-	return res, nil
+	return defaultMaxRetries
+}
+
+// sleepWithBackoff sleeps for the given interval and returns the next interval (exponential backoff, capped at 3s)
+func sleepWithBackoff(ctx context.Context, intervalMs int) int {
+	select {
+	case <-ctx.Done():
+	case <-time.After(time.Duration(intervalMs) * time.Millisecond):
+	}
+	next := intervalMs * 2
+	if next > 3000 {
+		next = 3000
+	}
+	return next
+}
+
+// getResponseErrorCode extracts the error code from a submit job response JSON
+func getResponseErrorCode(jsonValue *fastjson.Value) string {
+	if jsonValue == nil {
+		return ""
+	}
+	// check status.errorCode
+	if jsonValue.Exists("status") && jsonValue.Get("status").Exists("errorCode") {
+		code := strings.ReplaceAll(jsonValue.Get("status").Get("errorCode").String(), "\"", "")
+		if code != "" {
+			return code
+		}
+	}
+	// check respStatus.errorCode
+	if jsonValue.Exists("respStatus") && jsonValue.Get("respStatus").Exists("errorCode") {
+		code := strings.ReplaceAll(jsonValue.Get("respStatus").Get("errorCode").String(), "\"", "")
+		if code != "" {
+			return code
+		}
+	}
+	return ""
 }
 
 func (conn *ClickzettaConn) execInternal(ctx context.Context, query string, id jobId, bindings []driver.NamedValue) (*execResponse, error) {
@@ -184,7 +252,7 @@ func (conn *ClickzettaConn) execInternal(ctx context.Context, query string, id j
 		},
 	}
 
-	jobDesc := jobDesc{
+	jd := jobDesc{
 		VirtualCluster:       conn.cfg.VirtualCluster,
 		JobType:              SQL_JOB,
 		JobId:                &id,
@@ -200,7 +268,7 @@ func (conn *ClickzettaConn) execInternal(ctx context.Context, query string, id j
 	}
 
 	request := jobRequest{
-		JobDesc: &jobDesc,
+		JobDesc: &jd,
 	}
 
 	jsonData, err := json.Marshal(request.properties())
@@ -213,16 +281,304 @@ func (conn *ClickzettaConn) execInternal(ctx context.Context, query string, id j
 	headers["Content-Type"] = "application/json"
 	headers["instanceName"] = conn.cfg.Instance
 	headers["X-ClickZetta-Token"] = conn.cfg.Token
-	responseJson, stream, err := GetHttpResponseMsgToJson(headers, string(SubmitJobRequestPath), conn, jsonData)
 
-	finalResponse, err = conn.waitJobFinished(responseJson, id, headers, sdkJobTimeout, finalResponse, stream)
+	// submit job with retry logic (aligned with Java CZStatement.submitJob)
+	maxRetries := conn.getMaxRetries()
+	sleepIntervalMs := 500
+	var responseJson *fastjson.Value
+	var stream []byte
+	var lastErr error
+
+	for tried := 1; tried <= maxRetries; tried++ {
+		responseJson, stream, err = GetHttpResponseMsgToJson(headers, string(SubmitJobRequestPath), conn, jsonData)
+		if err != nil {
+			lastErr = err
+			logger.WithContext(ctx).Errorf("submitJob exception, jobid: %v, tried %d/%d, error: %v", id.ID, tried, maxRetries, err)
+			sleepIntervalMs = sleepWithBackoff(ctx, sleepIntervalMs)
+			continue
+		}
+
+		errorCode := getResponseErrorCode(responseJson)
+
+		// CZLH-57015: need to regenerate jobId and re-execute (not just retry submit)
+		if errorCode == errorCodeNeedReExecute {
+			logger.WithContext(ctx).Infof("job %v got %s, need re-execute with new jobId", id.ID, errorCodeNeedReExecute)
+			return finalResponse, &reExecuteError{jobID: id.ID, errorCode: errorCode}
+		}
+
+		// REQUEST_NOT_SUBMITTED: submit explicitly failed, retry
+		if errorCode == errorCodeRequestNotSubmitted {
+			logger.WithContext(ctx).Errorf("job submit not submitted, jobid: %v, tried %d/%d", id.ID, tried, maxRetries)
+			sleepIntervalMs = sleepWithBackoff(ctx, sleepIntervalMs)
+			continue
+		}
+
+		// JOB_ALREADY_EXIST: if first attempt, it's a real conflict; otherwise the previous submit actually went through
+		if errorCode == errorCodeJobAlreadyExist {
+			if tried == 1 {
+				errMsg := fmt.Sprintf("job %s already exists, cannot resubmit", id.ID)
+				logger.WithContext(ctx).Errorf(errMsg)
+				finalResponse.Success = false
+				finalResponse.Message = errMsg
+				return finalResponse, errors.New(errMsg)
+			}
+			// previous submit succeeded, go directly to poll result
+			finalResponse, err = conn.retryGetResult(ctx, id, headers, sdkJobTimeout, finalResponse, maxRetries)
+			if err != nil {
+				if isJobNotExistError(err) {
+					logger.WithContext(ctx).Errorf("job %v not found during polling after JOB_ALREADY_EXIST, retrying submit (%d/%d)", id.ID, tried, maxRetries)
+					sleepIntervalMs = sleepWithBackoff(ctx, sleepIntervalMs)
+					continue
+				}
+				return finalResponse, err
+			}
+			return finalResponse, nil
+		}
+
+		// check if job finished immediately in submit response
+		status := ""
+		if responseJson.Exists("status") && responseJson.Get("status").Exists("state") {
+			status = strings.ReplaceAll(responseJson.Get("status").Get("state").String(), "\"", "")
+		}
+
+		if status == "SUCCEED" || status == "FAILED" || status == "CANCELLED" {
+			// job finished immediately
+			return conn.handleFinishedJob(status, id, finalResponse, stream, responseJson)
+		}
+
+		if status == "QUEUEING" || status == "RUNNING" || status == "SETUP" {
+			// job is running, poll for result
+			finalResponse, err = conn.retryGetResult(ctx, id, headers, sdkJobTimeout, finalResponse, maxRetries)
+			if err != nil {
+				// JOB_NOT_EXIST during polling: retry submit
+				if isJobNotExistError(err) {
+					logger.WithContext(ctx).Errorf("job %v not found during polling, retrying submit (%d/%d)", id.ID, tried, maxRetries)
+					sleepIntervalMs = sleepWithBackoff(ctx, sleepIntervalMs)
+					continue
+				}
+				return finalResponse, err
+			}
+			return finalResponse, nil
+		}
+
+		// unknown status or no status, retry
+		logger.WithContext(ctx).Errorf("unexpected submit response for jobid: %v, status: %v, tried %d/%d", id.ID, status, tried, maxRetries)
+		sleepIntervalMs = sleepWithBackoff(ctx, sleepIntervalMs)
+	}
+
+	// all retries exhausted
+	if lastErr != nil {
+		finalResponse.Success = false
+		finalResponse.Message = fmt.Sprintf("job %s failed after %d retries: %v", id.ID, maxRetries, lastErr)
+		return finalResponse, lastErr
+	}
+	finalResponse.Success = false
+	finalResponse.Message = fmt.Sprintf("job %s failed after %d retries", id.ID, maxRetries)
+	return finalResponse, fmt.Errorf("job %s failed after %d retries", id.ID, maxRetries)
+}
+
+// reExecuteError signals that the job needs to be re-executed with a new jobId
+type reExecuteError struct {
+	jobID     string
+	errorCode string
+}
+
+func (e *reExecuteError) Error() string {
+	return fmt.Sprintf("job %s needs re-execute: %s", e.jobID, e.errorCode)
+}
+
+// jobNotExistError signals that the job was not found
+type jobNotExistError struct {
+	jobID string
+}
+
+func (e *jobNotExistError) Error() string {
+	return fmt.Sprintf("job %s not found", e.jobID)
+}
+
+func isJobNotExistError(err error) bool {
+	_, ok := err.(*jobNotExistError)
+	return ok
+}
+
+// handleFinishedJob processes a job that finished immediately in the submit response
+func (conn *ClickzettaConn) handleFinishedJob(status string, id jobId, finalResponse *execResponse, stream []byte, responseJson *fastjson.Value) (*execResponse, error) {
+	logger.WithContext(conn.ctx).Infof("job finished immediately, jobid: %v, status: %v", id.ID, status)
+	switch status {
+	case "SUCCEED":
+		finalResponse.Success = true
+		finalResponse.Message = "job succeed, jobid: " + id.ID
+		if err := json.Unmarshal(stream, &finalResponse.Data.HTTPResponseMessage); err != nil {
+			logger.WithContext(conn.ctx).Errorf("parse job response error: %v", err)
+			finalResponse.Success = false
+			finalResponse.Message = err.Error()
+			return finalResponse, err
+		}
+		return finalResponse, nil
+	case "FAILED":
+		finalResponse.Success = false
+		finalResponse.Message = "job failed, jobid: " + id.ID + ", error: " + responseJson.String()
+		return finalResponse, errors.New(finalResponse.Message)
+	case "CANCELLED":
+		finalResponse.Success = false
+		finalResponse.Message = "job cancelled, jobid: " + id.ID
+		return finalResponse, errors.New(finalResponse.Message)
+	default:
+		finalResponse.Success = false
+		finalResponse.Message = "unexpected job status: " + status
+		return finalResponse, errors.New(finalResponse.Message)
+	}
+}
+
+// isGetJobResultFailed checks if the get job result response indicates a temporary failure that should be retried
+// Aligned with Java CZStatement.isGetJobResultFailed
+func isGetJobResultFailed(responseJson *fastjson.Value) bool {
+	if responseJson == nil {
+		return true
+	}
+	errorCode := getResponseErrorCode(responseJson)
+	return errorCode == errorCodeRequestNotSubmitted || errorCode == errorCodeRequestStatusUnknown
+}
+
+// retryGetResult polls for job result with retry and exponential backoff (aligned with Java retryGetResult)
+func (conn *ClickzettaConn) retryGetResult(ctx context.Context, id jobId, headers map[string]string, timeout int, finalResponse *execResponse, maxRetries int) (*execResponse, error) {
+	account := clickzettaAccoount{UserId: 0}
+	getJobReq := getJobResultRequest{
+		Account:   &account,
+		JobId:     &id,
+		Offset:    0,
+		UserAgent: "",
+	}
+	apiReq := apiGetJobRequest{
+		GetJobResultReq: &getJobReq,
+		UserAgent:       "",
+	}
+	jsonData, err := json.Marshal(apiReq.properties())
 	if err != nil {
-		logger.WithContext(conn.ctx).Errorf("wait job finished error: %v", err)
+		finalResponse.Success = false
+		finalResponse.Message = err.Error()
+		return finalResponse, err
+	}
+	getJobURL, err := url.Parse(conn.cfg.Service + string(GetJobResultPath))
+	if err != nil {
+		finalResponse.Success = false
+		finalResponse.Message = err.Error()
 		return finalResponse, err
 	}
 
-	return finalResponse, nil
+	startTime := time.Now()
+	pollCount := 0           // counts polling attempts (for logging)
+	exceptionRetryCount := 0 // counts network/parsing errors
+	pollIntervalMs := 50
+	exceptionSleepMs := 50
 
+	for {
+		// check timeout
+		if conn.checkJobTimeout(timeout, startTime, id, headers) {
+			logger.WithContext(ctx).Errorf("job timeout, jobid: %v", id.ID)
+			finalResponse.Success = false
+			finalResponse.Message = "job timeout, jobid: " + id.ID
+			return finalResponse, driverTimeoutError{"job timeout, jobid: " + id.ID}
+		}
+
+		pollCount++
+
+		res, err := conn.internal.Post(ctx, getJobURL, headers, jsonData, 0)
+		if err != nil {
+			exceptionRetryCount++
+			logger.WithContext(ctx).Errorf("get job result error, jobid: %v, exception retry %d/%d: %v", id.ID, exceptionRetryCount, maxRetries, err)
+			if exceptionRetryCount > maxRetries {
+				finalResponse.Success = false
+				finalResponse.Message = err.Error()
+				return finalResponse, err
+			}
+			exceptionSleepMs = sleepWithBackoff(ctx, exceptionSleepMs)
+			continue
+		}
+
+		stream, err := io.ReadAll(res.Body)
+		res.Body.Close()
+		if err != nil {
+			exceptionRetryCount++
+			logger.WithContext(ctx).Errorf("read get job response error, jobid: %v, exception retry %d/%d: %v", id.ID, exceptionRetryCount, maxRetries, err)
+			if exceptionRetryCount > maxRetries {
+				finalResponse.Success = false
+				finalResponse.Message = err.Error()
+				return finalResponse, err
+			}
+			exceptionSleepMs = sleepWithBackoff(ctx, exceptionSleepMs)
+			continue
+		}
+
+		responseJson, err := fastjson.ParseBytes(stream)
+		if err != nil {
+			exceptionRetryCount++
+			logger.WithContext(ctx).Errorf("parse get job response error, jobid: %v, exception retry %d/%d: %v", id.ID, exceptionRetryCount, maxRetries, err)
+			if exceptionRetryCount > maxRetries {
+				finalResponse.Success = false
+				finalResponse.Message = err.Error()
+				return finalResponse, err
+			}
+			exceptionSleepMs = sleepWithBackoff(ctx, exceptionSleepMs)
+			continue
+		}
+
+		// check for JOB_NOT_EXIST error - throw immediately, don't retry
+		errorCode := getResponseErrorCode(responseJson)
+		if errorCode == errorCodeJobNotExist {
+			logger.WithContext(ctx).Warnf("job %v not exists", id.ID)
+			return finalResponse, &jobNotExistError{jobID: id.ID}
+		}
+
+		// check if response indicates temporary failure (REQUEST_NOT_SUBMITTED or REQUEST_STATUS_UNKNOWN)
+		if isGetJobResultFailed(responseJson) {
+			logger.WithContext(ctx).Infof("get job result failed (temporary), jobid: %v, errorCode: %v, poll attempt %d", id.ID, errorCode, pollCount)
+			exceptionSleepMs = sleepWithBackoff(ctx, exceptionSleepMs)
+			continue
+		}
+
+		if !responseJson.Exists("status") {
+			logger.WithContext(ctx).Errorf("get job error, no status field: %v", string(stream))
+			finalResponse.Success = false
+			finalResponse.Message = "get job error: " + string(stream)
+			return finalResponse, driver.ErrBadConn
+		}
+
+		if responseJson.Get("status").Exists("state") {
+			status := strings.ReplaceAll(responseJson.Get("status").Get("state").String(), "\"", "")
+
+			if status == "SUCCEED" {
+				finalResponse.Success = true
+				finalResponse.Message = "job succeed, jobid: " + id.ID
+				if err := json.Unmarshal(stream, &finalResponse.Data.HTTPResponseMessage); err != nil {
+					finalResponse.Success = false
+					finalResponse.Message = err.Error()
+					return finalResponse, err
+				}
+				return finalResponse, nil
+			}
+
+			if status == "FAILED" {
+				finalResponse.Success = false
+				finalResponse.Message = "job failed, jobid: " + id.ID + ", error: " + responseJson.String()
+				return finalResponse, errors.New(finalResponse.Message)
+			}
+
+			if status == "CANCELLED" {
+				finalResponse.Success = false
+				finalResponse.Message = "job cancelled, jobid: " + id.ID
+				return finalResponse, errors.New(finalResponse.Message)
+			}
+
+			// still running - reset exception retry count on successful poll
+			exceptionRetryCount = 0
+			elapsed := time.Since(startTime)
+			logger.WithContext(ctx).Infof("job %v is running, status: %v, poll attempt %d, elapsed: %v", id.ID, status, pollCount, elapsed)
+		}
+
+		// sleep before next poll
+		time.Sleep(time.Duration(pollIntervalMs) * time.Millisecond)
+	}
 }
 
 func GetHttpResponseMsgToJson(headers map[string]string, path string, connection *ClickzettaConn, jsonData []byte) (*fastjson.Value, []byte, error) {
@@ -251,139 +607,6 @@ func GetHttpResponseMsgToJson(headers map[string]string, path string, connection
 		return nil, nil, err
 	}
 	return responseJson, stream, nil
-}
-
-func (conn *ClickzettaConn) waitJobFinished(jsonValue *fastjson.Value, id jobId, headers map[string]string, timeout int, finalResponse *execResponse, original []byte) (*execResponse, error) {
-	if jsonValue.Exists("status") {
-		if jsonValue.Get("status").Exists("state") {
-			status := jsonValue.Get("status").Get("state").String()
-			status = strings.ReplaceAll(status, "\"", "")
-			if status == "QUEUEING" || status == "RUNNING" || status == "SETUP" {
-				account := clickzettaAccoount{
-					UserId: 0,
-				}
-				getJobRequest := getJobResultRequest{
-					Account:   &account,
-					JobId:     &id,
-					Offset:    0,
-					UserAgent: "",
-				}
-				apiReq := apiGetJobRequest{
-					GetJobResultReq: &getJobRequest,
-					UserAgent:       "",
-				}
-				jsonData, err := json.Marshal(apiReq.properties())
-				if err != nil {
-					logger.WithContext(conn.ctx).Errorf("parse get job request to json error: %v", err)
-					finalResponse.Success = false
-					finalResponse.Message = err.Error()
-					return finalResponse, err
-				}
-				url, err := url.Parse(conn.cfg.Service + string(GetJobResultPath))
-				if err != nil {
-					logger.WithContext(conn.ctx).Errorf("parses get job url path error: %v", err)
-					finalResponse.Success = false
-					finalResponse.Message = err.Error()
-					return finalResponse, err
-				}
-				startTime := time.Now()
-				for {
-					if conn.checkJobTimeout(timeout, startTime, id, headers) {
-						logger.WithContext(conn.ctx).Errorf("job timeout, jobid: %v", id.ID)
-						finalResponse.Success = false
-						finalResponse.Message = "job timeout, jobid: " + id.ID
-						return finalResponse, driverTimeoutError{"job timeout, jobid: " + id.ID}
-					}
-					res, err := conn.internal.Post(conn.ctx, url, headers, jsonData, 0)
-					if err != nil {
-						logger.WithContext(conn.ctx).Errorf("get job error: %v", err)
-						finalResponse.Success = false
-						finalResponse.Message = err.Error()
-						return finalResponse, err
-					}
-					defer res.Body.Close()
-					stream, err := io.ReadAll(res.Body)
-					if err != nil {
-						logger.WithContext(conn.ctx).Errorf("read get job response error: %v", err)
-						finalResponse.Success = false
-						finalResponse.Message = err.Error()
-						return finalResponse, err
-					}
-
-					responseJson, err := fastjson.ParseBytes(stream)
-					if err != nil {
-						logger.WithContext(conn.ctx).Errorf("parse get job response to json error: %v", err)
-						finalResponse.Success = false
-						finalResponse.Message = err.Error()
-						return finalResponse, err
-					}
-					if responseJson.Exists("status") {
-						if responseJson.Get("status").Exists("state") {
-							status := responseJson.Get("status").Get("state").String()
-							status = strings.ReplaceAll(status, "\"", "")
-							if status == "SUCCEED" || status == "FAILED" {
-								logger.WithContext(conn.ctx).Infof("job finished, jobid: %v", id.ID)
-								if status == "SUCCEED" {
-									finalResponse.Success = true
-									finalResponse.Message = "job succeed, jobid: " + id.ID
-									err := json.Unmarshal(stream, &finalResponse.Data.HTTPResponseMessage)
-									if err != nil {
-										logger.WithContext(conn.ctx).Errorf("parse get job response to json error: %v", err)
-										finalResponse.Success = false
-										finalResponse.Message = err.Error()
-										return finalResponse, err
-									}
-									return finalResponse, nil
-								} else {
-									finalResponse.Success = false
-									finalResponse.Message = "job failed, jobid: " + id.ID + ", error: " + responseJson.String()
-									return finalResponse, nil
-								}
-							} else {
-								logger.WithContext(conn.ctx).Infof("waiting job finished, job status: %v, jobid: %v", status, id.ID)
-								time.Sleep(2 * time.Second)
-							}
-						}
-					} else {
-						logger.WithContext(conn.ctx).Errorf("get job error: %v", string(stream))
-						finalResponse.Success = false
-						finalResponse.Message = "get job error: " + string(stream)
-						return finalResponse, driver.ErrBadConn
-					}
-				}
-
-			} else if status == "SUCCEED" || status == "FAILED" || status == "CANCELLED" {
-				logger.WithContext(conn.ctx).Infof("job finished, jobid: %v", id.ID)
-				if status == "SUCCEED" {
-					finalResponse.Success = true
-					finalResponse.Message = "job succeed, jobid: " + id.ID
-					err := json.Unmarshal(original, &finalResponse.Data.HTTPResponseMessage)
-					if err != nil {
-						logger.WithContext(conn.ctx).Errorf("parse get job response to json error: %v", err)
-						finalResponse.Success = false
-						finalResponse.Message = err.Error()
-						return finalResponse, err
-					}
-					return finalResponse, nil
-				} else if status == "FAILED" {
-					finalResponse.Success = false
-					finalResponse.Message = "job failed, jobid: " + id.ID + ", error: " + jsonValue.String()
-					return finalResponse, errors.New(finalResponse.Message)
-				} else if status == "CANCELLED" {
-					finalResponse.Success = false
-					finalResponse.Message = "job cancelled, jobid: " + id.ID
-					return finalResponse, errors.New(finalResponse.Message)
-				}
-			}
-
-		}
-	} else {
-		logger.WithContext(conn.ctx).Errorf("get job error: %v", string(original))
-		finalResponse.Success = false
-		finalResponse.Message = "get job error: " + string(original)
-		return finalResponse, driver.ErrBadConn
-	}
-	return nil, nil
 }
 
 func (conn *ClickzettaConn) checkJobTimeout(timeout int, startTime time.Time, id jobId, headers map[string]string) bool {
@@ -429,9 +652,7 @@ func (conn *ClickzettaConn) cancelJob(id jobId, headers map[string]string) error
 }
 
 func formatJobId() string {
-	formatTime := time.Now().Format("20060102150405")
-	formatTime = formatTime + strconv.Itoa(rand.Intn(100000))
-	return formatTime
+	return getRequestIDGenerator().generate()
 }
 
 func (conn *ClickzettaConn) Begin() (driver.Tx, error) {
