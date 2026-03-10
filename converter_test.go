@@ -122,9 +122,9 @@ func TestArrowToValue_Map_StringString_ObjectJSON(t *testing.T) {
 	dest := make([]interface{}, arr.Len())
 	err := arrowToValue(dest, meta, arr, time.Local, false)
 	assert.NoError(t, err)
-	// should be object JSON
-	var got map[string]string
-	assert.NoError(t, json.Unmarshal([]byte(dest[0].(string)), &got))
+	// should be typed map[string]string
+	got, ok := dest[0].(map[string]string)
+	assert.True(t, ok)
 	assert.Equal(t, "t-001", got["trace_id"])
 	assert.Equal(t, "1", got["version"])
 }
@@ -137,9 +137,9 @@ func TestArrowToValue_Map_StringInt_FallbackNormalize(t *testing.T) {
 	dest := make([]interface{}, arr.Len())
 	err := arrowToValue(dest, meta, arr, time.Local, false)
 	assert.NoError(t, err)
-	// should be object JSON, number should be number
-	var got map[string]interface{}
-	assert.NoError(t, json.Unmarshal([]byte(dest[0].(string)), &got))
-	assert.Equal(t, float64(10), got["n"]) // json number is float64
-	assert.Equal(t, float64(20), got["m"]) // json number is float64
+	// int32 values: typed map returns map[string]int32
+	got, ok := dest[0].(map[string]int32)
+	assert.True(t, ok)
+	assert.Equal(t, int32(10), got["n"])
+	assert.Equal(t, int32(20), got["m"])
 }

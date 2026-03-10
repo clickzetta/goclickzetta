@@ -212,6 +212,8 @@ func createBuilderFromType(mem memory.Allocator, dt arrow.DataType) array.Builde
 		return array.NewTimestampBuilder(mem, t)
 	case *arrow.ListType:
 		return array.NewListBuilder(mem, t.Elem())
+	case *arrow.MapType:
+		return array.NewMapBuilder(mem, t.KeyType(), t.ItemType(), false)
 	case *arrow.StructType:
 		return array.NewStructBuilder(mem, t)
 	case *arrow.NullType:
@@ -380,29 +382,32 @@ func getArrowTypeAndBuilder(mem memory.Allocator, value interface{}, fieldName s
 		listType := arrow.ListOfField(itemField)
 		return makeFieldWithID(fieldName, listType, true, listFieldID), array.NewListBuilder(mem, itemField.Type)
 	case map[string]interface{}:
-		// assign ID to struct field
-		structFieldID := fieldIDGen.next()
+		// convert to Arrow Map type
+		mapFieldID := fieldIDGen.next()
 
-		// process map type, convert to Arrow Struct
-		structFields := make([]arrow.Field, 0, len(v))
-
-		// sort by key to ensure consistent order
-		keys := make([]string, 0, len(v))
-		for k := range v {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-
-		// create corresponding field for each key (recursively infer type, each nested field also assigns field ID)
-		for _, k := range keys {
-			val := v[k]
-			field, _ := getArrowTypeAndBuilder(mem, val, k, fieldIDGen)
-			structFields = append(structFields, field)
+		// infer value type from the first non-nil value
+		var valueType arrow.DataType = arrow.BinaryTypes.String // default to string
+		for _, val := range v {
+			if val != nil {
+				field, builder := getArrowTypeAndBuilder(mem, val, "value", fieldIDGen)
+				valueType = field.Type
+				builder.Release()
+				break
+			}
 		}
 
-		structType := arrow.StructOf(structFields...)
-		structBuilder := array.NewStructBuilder(mem, structType)
-		return makeFieldWithID(fieldName, structType, true, structFieldID), structBuilder
+		keyField := arrow.Field{Name: "key", Type: arrow.BinaryTypes.String, Nullable: false}
+		_ = keyField
+		mapType := arrow.MapOf(arrow.BinaryTypes.String, valueType)
+		mapBuilder := array.NewMapBuilder(mem, arrow.BinaryTypes.String, valueType, false)
+		return makeFieldWithID(fieldName, mapType, true, mapFieldID), mapBuilder
+	case map[string]string:
+		// convert to Arrow Map<String, String> type
+		mapFieldID := fieldIDGen.next()
+
+		mapType := arrow.MapOf(arrow.BinaryTypes.String, arrow.BinaryTypes.String)
+		mapBuilder := array.NewMapBuilder(mem, arrow.BinaryTypes.String, arrow.BinaryTypes.String, false)
+		return makeFieldWithID(fieldName, mapType, true, mapFieldID), mapBuilder
 	default:
 		// for unknown type, use String type as fallback (can accept any value, including null)
 		// String type is generic, can convert any type using fmt.Sprintf
@@ -514,6 +519,8 @@ func appendValue(builder array.Builder, value interface{}) {
 		}
 	case *array.ListBuilder:
 		appendListValue(b, value)
+	case *array.MapBuilder:
+		appendMapValue(b, value)
 	case *array.StructBuilder:
 		appendStructValue(b, value)
 	case *array.NullBuilder:
@@ -575,6 +582,47 @@ func appendStructValue(sb *array.StructBuilder, value interface{}) {
 			} else {
 				fieldBuilder.AppendNull()
 			}
+		}
+	}
+}
+
+// appendMapValue add map value to MapBuilder
+func appendMapValue(mb *array.MapBuilder, value interface{}) {
+	if value == nil {
+		mb.AppendNull()
+		return
+	}
+
+	mb.Append(true)
+	keyBuilder := mb.KeyBuilder()
+	itemBuilder := mb.ItemBuilder()
+
+	switch m := value.(type) {
+	case map[string]interface{}:
+		kb := keyBuilder.(*array.StringBuilder)
+		// sort keys for consistent order
+		keys := make([]string, 0, len(m))
+		for k := range m {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+
+		for _, k := range keys {
+			kb.Append(k)
+			appendValue(itemBuilder, m[k])
+		}
+	case map[string]string:
+		kb := keyBuilder.(*array.StringBuilder)
+		// sort keys for consistent order
+		keys := make([]string, 0, len(m))
+		for k := range m {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+
+		for _, k := range keys {
+			kb.Append(k)
+			appendValue(itemBuilder, m[k])
 		}
 	}
 }
