@@ -198,7 +198,13 @@ func (conn *ClickzettaConn) execInternal(ctx context.Context, query string, id j
 	}
 	flags := GetDriverFlags(ctx)
 	for k, v := range flags {
-		hints[k] = v
+		switch k {
+		case "workspace", "virtualCluster", "schema":
+			// these are handled separately as structured request parameters
+			continue
+		default:
+			hints[k] = v
+		}
 	}
 
 	isSeprate := false
@@ -232,11 +238,25 @@ func (conn *ClickzettaConn) execInternal(ctx context.Context, query string, id j
 	}
 
 	schema := conn.cfg.Schema
+	if v, ok := flags["schema"]; ok && v != "" {
+		schema = v
+	}
 	sqls := append(make([]string, 0), query)
+	catalog := conn.cfg.Workspace
+	if v, ok := conn.cfg.Params["catalog"]; ok && v != nil {
+		catalog = *v
+	}
+	if v, ok := flags["workspace"]; ok && v != "" {
+		catalog = v
+	}
+	virtualCluster := conn.cfg.VirtualCluster
+	if v, ok := flags["virtualCluster"]; ok && v != "" {
+		virtualCluster = v
+	}
 	sqljob := sqlJob{
 		Query: sqls,
 		DefaultNamespace: []string{
-			conn.cfg.Workspace,
+			catalog,
 			schema,
 		},
 		SQLJobConfig: &sqlConfig,
@@ -246,7 +266,7 @@ func (conn *ClickzettaConn) execInternal(ctx context.Context, query string, id j
 	}
 
 	jd := jobDesc{
-		VirtualCluster:       conn.cfg.VirtualCluster,
+		VirtualCluster:       virtualCluster,
 		JobType:              SQL_JOB,
 		JobId:                &id,
 		JobName:              "SQL_JOB",

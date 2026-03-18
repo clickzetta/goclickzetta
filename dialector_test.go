@@ -2,6 +2,7 @@ package goclickzetta
 
 import (
 	"log"
+	"os"
 	"testing"
 
 	"github.com/zeebo/assert"
@@ -9,8 +10,10 @@ import (
 )
 
 func TestClickZettaDialector(t *testing.T) {
-	// 创建一个新的驱动
-	dsn := "username:passwprd@https(mock.clickzetta.com)/schema?virtualCluster=default&workspace=mock&instance=mock"
+	dsn := os.Getenv("CZ_TEST_DSN")
+	if dsn == "" {
+		t.Skip("CZ_TEST_DSN not set, skipping integration test")
+	}
 	driver := Open(dsn)
 	db, err := gorm.Open(driver, &gorm.Config{})
 	if err != nil {

@@ -1,6 +1,7 @@
 package goclickzetta
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"math"
@@ -142,4 +143,23 @@ func (dialector Dialector) QuoteTo(writer clause.Writer, str string) {
 
 func (dialector Dialector) Explain(sql string, vars ...interface{}) string {
 	return fmt.Sprintf("SQL: %s, Vars: %v", sql, vars)
+}
+
+// NewSession returns a new *gorm.DB with the given DriverFlags bound to its context.
+// All subsequent operations on the returned db will automatically use these flags,
+// without needing to call WithDriverFlags on each query.
+//
+// Example:
+//
+//	wsDB := goclickzetta.NewSession(db, goclickzetta.DriverFlags{
+//	    "workspace": "my_workspace",
+//	    "schema":    "my_schema",
+//	})
+//	wsDB.Find(&results)  // automatically uses my_workspace
+func NewSession(db *gorm.DB, flags DriverFlags) *gorm.DB {
+	ctx := context.Background()
+	if db.Statement != nil && db.Statement.Context != nil {
+		ctx = db.Statement.Context
+	}
+	return db.WithContext(WithDriverFlags(ctx, flags))
 }
