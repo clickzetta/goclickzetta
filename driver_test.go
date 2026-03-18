@@ -4,8 +4,17 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"os"
 	"testing"
 )
+
+func getTestDSN(t *testing.T) string {
+	dsn := os.Getenv("CZ_TEST_DSN")
+	if dsn == "" {
+		t.Skip("CZ_TEST_DSN not set, skipping integration test")
+	}
+	return dsn
+}
 
 func TestDriver(t *testing.T) {
 	t.Run("TestOpen", TestOpen)
@@ -14,7 +23,7 @@ func TestDriver(t *testing.T) {
 }
 
 func TestOpenWithString(t *testing.T) {
-	dsn := "username:passwprd@https(mock.clickzetta.com)/schema?virtualCluster=default&workspace=mock&instance=mock"
+	dsn := getTestDSN(t)
 	driver := ClickzettaDriver{}
 	conn, err := driver.Open(dsn)
 	if err != nil {
@@ -30,19 +39,9 @@ func TestOpenWithString(t *testing.T) {
 }
 
 func TestOpen(t *testing.T) {
-	cfg := Config{
-		UserName:       "username",
-		Password:       "password!",
-		Protocol:       "https",
-		Service:        "https://mock.clickzetta.com",
-		Instance:       "mock",
-		Workspace:      "mock",
-		VirtualCluster: "default",
-		Schema:         "default",
-	}
-	dsnStr := DSN(&cfg)
+	dsn := getTestDSN(t)
 	driver := ClickzettaDriver{}
-	conn, err := driver.Open(dsnStr)
+	conn, err := driver.Open(dsn)
 	if err != nil {
 		t.Error(err)
 	}
@@ -57,19 +56,14 @@ func TestOpen(t *testing.T) {
 
 func TestOpenWithConfig(t *testing.T) {
 	ctx := context.TODO()
-	cfg := Config{
-		UserName:       "username",
-		Password:       "password!",
-		Protocol:       "https",
-		Service:        "https://mock.clickzetta.com",
-		Instance:       "mock",
-		Workspace:      "mock",
-		VirtualCluster: "default",
-		Schema:         "default",
+	dsn := getTestDSN(t)
+	cfg, err := ParseDSN(dsn)
+	if err != nil {
+		t.Fatal(err)
 	}
 
 	driver := ClickzettaDriver{}
-	conn, err := driver.OpenWithConfig(ctx, cfg)
+	conn, err := driver.OpenWithConfig(ctx, *cfg)
 	if err != nil {
 		t.Error(err)
 	}
@@ -84,7 +78,8 @@ func TestOpenWithConfig(t *testing.T) {
 }
 
 func TestSqlOpen(t *testing.T) {
-	db, err := sql.Open("clickzetta", "username:passwprd@https(mock.clickzetta.com)/schema?virtualCluster=default&workspace=mock&instance=mock")
+	dsn := getTestDSN(t)
+	db, err := sql.Open("clickzetta", dsn)
 	if err != nil {
 		t.Error(err)
 	}

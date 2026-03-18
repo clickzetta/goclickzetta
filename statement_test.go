@@ -4,13 +4,17 @@ import (
 	"database/sql/driver"
 	"fmt"
 	"io"
+	"os"
 	"testing"
 
 	"github.com/zeebo/assert"
 )
 
 func initConn() *ClickzettaConn {
-	dsn := "username:passwprd@https(mock.clickzetta.com)/schema?virtualCluster=default&workspace=mock&instance=mock"
+	dsn := os.Getenv("CZ_TEST_DSN")
+	if dsn == "" {
+		return nil
+	}
 	driver := ClickzettaDriver{}
 	conn, err := driver.Open(dsn)
 	if err != nil {
@@ -38,10 +42,10 @@ func TestStmt(t *testing.T) {
 }
 func TestStmtClose(t *testing.T) {
 	connection := initConn()
-	defer closeConn(connection)
 	if connection == nil {
-		t.Error("connection is nil")
+		t.Skip("CZ_TEST_DSN not set, skipping integration test")
 	}
+	defer closeConn(connection)
 	stmt := ClickzettaStmt{
 		conn:  connection,
 		query: "select * from clickzetta_sample_data.ecommerce_events_history.ecommerce_events_multicategorystore_live limit 10;",
@@ -54,10 +58,10 @@ func TestStmtClose(t *testing.T) {
 
 func TestStmtExecContext(t *testing.T) {
 	connection := initConn()
-	defer closeConn(connection)
 	if connection == nil {
-		t.Error("connection is nil")
+		t.Skip("CZ_TEST_DSN not set, skipping integration test")
 	}
+	defer closeConn(connection)
 	stmt := ClickzettaStmt{
 		conn:  connection,
 		query: "select * from clickzetta_sample_data.ecommerce_events_history.ecommerce_events_multicategorystore_live limit 10;",
@@ -76,10 +80,10 @@ func TestStmtExecContext(t *testing.T) {
 
 func TestStmtQueryContext(t *testing.T) {
 	connection := initConn()
-	defer closeConn(connection)
 	if connection == nil {
-		t.Error("connection is nil")
+		t.Skip("CZ_TEST_DSN not set, skipping integration test")
 	}
+	defer closeConn(connection)
 	stmt := ClickzettaStmt{
 		conn:  connection,
 		query: "select * from clickzetta_sample_data.ecommerce_events_history.ecommerce_events_multicategorystore_live limit 10;",
@@ -97,10 +101,10 @@ func TestStmtQueryContext(t *testing.T) {
 
 func TestStmtExec(t *testing.T) {
 	connection := initConn()
-	defer closeConn(connection)
 	if connection == nil {
-		t.Error("connection is nil")
+		t.Skip("CZ_TEST_DSN not set, skipping integration test")
 	}
+	defer closeConn(connection)
 	stmt := ClickzettaStmt{
 		conn:  connection,
 		query: "select * from clickzetta_sample_data.ecommerce_events_history.ecommerce_events_multicategorystore_live limit 10;",
@@ -119,10 +123,10 @@ func TestStmtExec(t *testing.T) {
 
 func TestStmtQuery(t *testing.T) {
 	connection := initConn()
-	defer closeConn(connection)
 	if connection == nil {
-		t.Error("connection is nil")
+		t.Skip("CZ_TEST_DSN not set, skipping integration test")
 	}
+	defer closeConn(connection)
 	stmt := ClickzettaStmt{
 		conn:  connection,
 		query: "select * from clickzetta_sample_data.ecommerce_events_history.ecommerce_events_multicategorystore_live limit 10;",
