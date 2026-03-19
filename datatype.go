@@ -22,12 +22,14 @@ const (
 	VARCHAR
 	NOT_SUPPORTED
 	JSON
+	VECTOR
+	VECTOR_TYPE
 )
 
 var clickzettaTypes = [...]string{"INT64", "BOOLEAN", "CHAR", "DATE", "DECIMAL",
 	"FLOAT64", "FLOAT32", "INT32", "INTERVAL", "INT16",
 	"STRING", "TIMESTAMP_LTZ", "INT8", "ARRAY", "MAP", "STRUCT", "VARCHAR", "NOT_SUPPORTED",
-	"JSON"}
+	"JSON", "VECTOR", "VECTOR_TYPE"}
 
 func (st clickzettaType) String() string {
 	return clickzettaTypes[st]

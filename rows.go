@@ -463,6 +463,9 @@ func mapClickzettaTypeToArrow(typeName string, precision, scale int64) arrow.Dat
 		return arrow.FixedWidthTypes.Date32
 	case "TIMESTAMP", "TIMESTAMP_LTZ", "TIMESTAMP_NTZ":
 		return arrow.FixedWidthTypes.Timestamp_us
+	case "VECTOR", "VECTOR_TYPE":
+		// Without dimension info, default to a variable-length list of float32
+		return arrow.ListOfField(arrow.Field{Name: "item", Type: arrow.PrimitiveTypes.Float32})
 	default:
 		return arrow.BinaryTypes.String
 	}

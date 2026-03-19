@@ -659,6 +659,22 @@ func (bw *BulkloadWriter) EstimateRowSize() int {
 			size += 8
 		} else if column.GetCategory() == util.DataTypeCategory_BOOLEAN {
 			size += 1
+		} else if column.GetCategory() == util.DataTypeCategory_VECTOR_TYPE {
+			vi := column.GetVectorInfo()
+			dim := int(vi.GetDimension())
+			// estimate element size based on number type
+			elemSize := 4 // default float32
+			switch vi.GetNumberType() {
+			case util.VectorNumberType_I8:
+				elemSize = 1
+			case util.VectorNumberType_I16, util.VectorNumberType_F16:
+				elemSize = 2
+			case util.VectorNumberType_I32, util.VectorNumberType_F32:
+				elemSize = 4
+			case util.VectorNumberType_I64, util.VectorNumberType_F64, util.VectorNumberType_BF64:
+				elemSize = 8
+			}
+			size += dim * elemSize
 		} else {
 			size += 8
 		}
@@ -884,8 +900,37 @@ func ConvertToArrowDataType(tpe *util.DataType) (arrow.DataType, error) {
 		} else {
 			return nil, errors.New("Unsupported timestamp unit:" + tu.String())
 		}
+	case util.DataTypeCategory_VECTOR_TYPE:
+		vi := tpe.GetVectorInfo()
+		elemType := vectorNumberTypeToArrow(vi.GetNumberType())
+		dim := int32(vi.GetDimension())
+		return arrow.FixedSizeListOfField(dim, arrow.Field{Name: "item", Type: elemType}), nil
 	default:
 		return nil, errors.New("Unsupported data type:" + tpe.String())
+	}
+}
+
+// vectorNumberTypeToArrow maps VectorNumberType to Arrow primitive type.
+func vectorNumberTypeToArrow(nt util.VectorNumberType) arrow.DataType {
+	switch nt {
+	case util.VectorNumberType_I8:
+		return arrow.PrimitiveTypes.Int8
+	case util.VectorNumberType_I16:
+		return arrow.PrimitiveTypes.Int16
+	case util.VectorNumberType_I32:
+		return arrow.PrimitiveTypes.Int32
+	case util.VectorNumberType_I64:
+		return arrow.PrimitiveTypes.Int64
+	case util.VectorNumberType_F16:
+		return &arrow.Float16Type{}
+	case util.VectorNumberType_F32:
+		return arrow.PrimitiveTypes.Float32
+	case util.VectorNumberType_F64:
+		return arrow.PrimitiveTypes.Float64
+	case util.VectorNumberType_BF64:
+		return arrow.PrimitiveTypes.Float64
+	default:
+		return arrow.PrimitiveTypes.Float32
 	}
 }
 

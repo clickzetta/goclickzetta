@@ -581,6 +581,47 @@ func arrowToValue(
 			}
 		}
 		return err
+	case VECTOR, VECTOR_TYPE:
+		// Vector data is transmitted as List/FixedSizeList in Arrow format,
+		// similar to ARRAY but specifically for vector types.
+		switch data := srcValue.(type) {
+		case *array.List:
+			for i := range destcol {
+				if !srcValue.IsNull(i) {
+					start, end := data.ValueOffsets(i)
+					listValues := data.ListValues()
+					destcol[i] = convertListToTypedSlice(listValues, int(start), int(end))
+				}
+			}
+		case *array.LargeList:
+			for i := range destcol {
+				if !srcValue.IsNull(i) {
+					start, end := data.ValueOffsets(i)
+					listValues := data.ListValues()
+					destcol[i] = convertListToTypedSlice(listValues, int(start), int(end))
+				}
+			}
+		case *array.FixedSizeList:
+			for i := range destcol {
+				if !srcValue.IsNull(i) {
+					listSize := data.DataType().(*arrow.FixedSizeListType).Len()
+					start := i * int(listSize)
+					end := start + int(listSize)
+					listValues := data.ListValues()
+					destcol[i] = convertListToTypedSlice(listValues, start, end)
+				}
+			}
+		case *array.String:
+			// Fallback: some responses may still encode vector as string
+			for i := range destcol {
+				if !srcValue.IsNull(i) {
+					destcol[i] = data.Value(i)
+				}
+			}
+		default:
+			return fmt.Errorf("unsupported VECTOR arrow type: %T", srcValue)
+		}
+		return err
 	case DATE:
 		for i, date32 := range srcValue.(*array.Date32).Date32Values() {
 			if !srcValue.IsNull(i) {

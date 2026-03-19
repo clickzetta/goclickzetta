@@ -30,12 +30,16 @@ enum DataTypeCategory {
   INTERVAL_YEAR_MONTH = 15;
   INTERVAL_DAY_TIME = 16;
 
+  TIMESTAMP_NTZ = 17;
+
   BITMAP = 50;
 
   ARRAY = 100;
   MAP = 101;
   STRUCT = 102;
   FUNCTION_TYPE = 103;
+  JSON = 104;
+  VECTOR_TYPE = 105;
   VOID = 200;
 }
 
@@ -80,6 +84,22 @@ message IntervalYearMonthInfo {
   IntervalUnit to = 2;
 }
 
+enum VectorNumberType {
+  I8 = 0;
+  I16 = 1;
+  I32 = 2;
+  I64 = 3;
+  F16 = 4;
+  F32 = 5;
+  F64 = 6;
+  BF64 = 7;
+}
+
+message VectorTypeInfo {
+  VectorNumberType numberType = 1;
+  uint32 dimension = 2;
+}
+
 message ArrayTypeInfo {
   DataType elementType = 1;
 }
@@ -122,5 +142,6 @@ message DataType {
     IntervalYearMonthInfo interval_year_month_info = 10;
     TimestampInfo timestamp_info = 12;
     FunctionTypeInfo function_info = 13;
+    VectorTypeInfo vector_info = 14;
   }
 }
