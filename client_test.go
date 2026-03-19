@@ -9,8 +9,8 @@ import (
 
 func TestClientGet(t *testing.T) {
 	t.Log("TestClientGet")
-	hClient := &http.Client{Transport: HTTPTransport}
-	transport := HTTPTransport
+	transport := newHTTPTransport()
+	hClient := &http.Client{Transport: transport}
 	client := &httpClient{
 		client:    hClient,
 		transport: transport,
@@ -33,8 +33,8 @@ func TestClientGet(t *testing.T) {
 
 func TestClientPost(t *testing.T) {
 	t.Log("TestClientPost")
-	hClient := &http.Client{Transport: HTTPTransport}
-	transport := HTTPTransport
+	transport := newHTTPTransport()
+	hClient := &http.Client{Transport: transport}
 	client := &httpClient{
 		client:    hClient,
 		transport: transport,
