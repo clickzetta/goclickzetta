@@ -36,15 +36,23 @@ const (
 	GETWAYPATH           requestPath = "/igs/gatewayEndpoint"
 )
 
-var HTTPTransport = &http.Transport{
-	DialContext: (&net.Dialer{
-		Timeout:   30 * time.Second, // 连接超时时间
-		KeepAlive: 60 * time.Second, // 保持长连接的时间
-	}).DialContext, // 设置连接的参数
-	MaxIdleConns:          500,              // 最大空闲连接
-	IdleConnTimeout:       60 * time.Second, // 空闲连接的超时时间
-	ExpectContinueTimeout: 30 * time.Second, // 等待服务第一个响应的超时时间
-	MaxIdleConnsPerHost:   100,              // 每个host保持的空闲连接数
+// HTTPTransport is the default transport configuration.
+// Deprecated: kept for backward compatibility. Each connection now creates its own transport.
+var HTTPTransport = newHTTPTransport()
+
+// newHTTPTransport creates a new http.Transport for each connection,
+// so that closing one connection's transport won't affect others.
+func newHTTPTransport() *http.Transport {
+	return &http.Transport{
+		DialContext: (&net.Dialer{
+			Timeout:   30 * time.Second, // 连接超时时间
+			KeepAlive: 60 * time.Second, // 保持长连接的时间
+		}).DialContext, // 设置连接的参数
+		MaxIdleConns:          500,              // 最大空闲连接
+		IdleConnTimeout:       60 * time.Second, // 空闲连接的超时时间
+		ExpectContinueTimeout: 30 * time.Second, // 等待服务第一个响应的超时时间
+		MaxIdleConnsPerHost:   100,              // 每个host保持的空闲连接数
+	}
 }
 
 type atomicBool = atomic.Bool
@@ -688,11 +696,11 @@ func (conn *ClickzettaConn) BeginTx(
 
 func (conn *ClickzettaConn) cleanup() {
 	logger.WithContext(conn.ctx).Infof("cleanup")
-	conn.cfg = nil
-	conn.ctx = nil
 	if err := conn.internal.Close(); err != nil {
 		logger.WithContext(conn.ctx).Errorf("failed to close internal client: %v", err)
 	}
+	conn.cfg = nil
+	conn.ctx = nil
 }
 
 func (conn *ClickzettaConn) Close() (err error) {
@@ -1306,11 +1314,12 @@ func buildClickzettaConn(ctx context.Context, config Config) (*ClickzettaConn, e
 		cfg: &config,
 	}
 
+	transport := newHTTPTransport()
 	cli := &httpClient{
-		transport: HTTPTransport,
+		transport: transport,
 	}
 
-	cli.client = &http.Client{Transport: HTTPTransport}
+	cli.client = &http.Client{Transport: transport}
 	conn.internal = cli
 
 	loginPrarams := make(map[string]string)

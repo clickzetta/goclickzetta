@@ -21,6 +21,7 @@ type httpClient struct {
 }
 
 func (cli *httpClient) Close() error {
+	// Each connection has its own transport, safe to close idle connections.
 	cli.transport.CloseIdleConnections()
 	cli.client.CloseIdleConnections()
 	return nil
