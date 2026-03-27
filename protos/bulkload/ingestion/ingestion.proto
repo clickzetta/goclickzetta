@@ -170,6 +170,7 @@ message OssStagingPathInfo {
   string oss_endpoint = 6;
   string oss_internal_endpoint = 7;
   uint64 oss_expire_time = 8;
+  string oss_region = 9;
 }
 
 message CosStagingPathInfo {
@@ -181,10 +182,55 @@ message CosStagingPathInfo {
   uint64 cos_expire_time = 6;
 }
 
+message S3StagingPathInfo {
+  string path = 1;
+  string sts_ak_id = 2;
+  string sts_ak_secret = 3;
+  string sts_token = 4;
+  string s3_region = 5;
+  uint64 s3_expire_time = 6;
+}
+
+message GcsStagingPathInfo {
+  string path = 1;
+  string sts_ak_id = 2;
+  string sts_ak_secret = 3;
+  string sts_token = 4;
+  string gcs_region = 5;
+  uint64 gcs_expire_time = 6;
+}
+
+message ObsStagingPathInfo {
+  string path = 1;
+  string sts_ak_id = 2;
+  string sts_ak_secret = 3;
+  string sts_token = 4;
+  string obs_endpoint = 5;
+  uint64 obs_expire_time = 6;
+}
+
+message TosStagingPathInfo {
+  string path = 1;
+  string sts_ak_id = 2;
+  string sts_ak_secret = 3;
+  string sts_token = 4;
+  string tos_region = 5;
+  uint64 tos_expire_time = 6;
+}
+
+message LocalStagingPathInfo {
+  string path = 1;
+}
+
 message StagingPathInfo {
   oneof path_info {
     OssStagingPathInfo oss_path = 1;
     CosStagingPathInfo cos_path = 2;
+    LocalStagingPathInfo local_path = 3;
+    S3StagingPathInfo s3_path = 4;
+    GcsStagingPathInfo gcs_path = 5;
+    ObsStagingPathInfo obs_path = 6;
+    TosStagingPathInfo tos_path = 7;
   }
 }
 
@@ -202,6 +248,7 @@ message BulkLoadStreamInfo {
   // Encryption config of cloud object stores.
   // Use a map here as these options vary from cloud to cloud.
   map<string, string> encryption_options = 11;
+  repeated string partial_update_columns = 12;
 }
 
 message BulkLoadStreamWriterConfig {
@@ -209,6 +256,9 @@ message BulkLoadStreamWriterConfig {
   util.FileFormatType file_format = 2;
   int64 max_num_rows_per_file = 3;
   int64 max_size_in_bytes_per_file = 4;
+  int64 max_string_bytes = 5;
+  int64 max_binary_bytes = 6;
+  int64 max_json_bytes = 7;
 }
 
 message CreateBulkLoadStreamRequest {
@@ -218,6 +268,7 @@ message CreateBulkLoadStreamRequest {
   string partition_spec = 4;
   repeated string record_keys = 5;
   bool prefer_internal_endpoint = 6;
+  repeated string partial_update_columns = 7;
 }
 
 message CreateBulkLoadStreamResponse {

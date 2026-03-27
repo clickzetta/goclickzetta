@@ -113,6 +113,7 @@ message StructTypeInfo {
   message Field {
     string name = 1;
     DataType type = 2;
+    uint32 type_reference = 3;  // Reference to a pre-defined type. Used for reducing pb size and ser-de overhead.
   }
   repeated Field fields = 1;
 }
