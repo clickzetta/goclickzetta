@@ -82,8 +82,9 @@ func newTestConnWithRetries(mock InternalClient, maxRetries int) *ClickzettaConn
 	return &ClickzettaConn{
 		ctx: context.Background(),
 		cfg: &Config{
-			Service: "http://localhost",
-			Params:  map[string]*string{"sdk.query.max.retries": &v},
+			Service:   "http://localhost",
+			Workspace: "ws",
+			Params:    map[string]*string{"sdk.query.max.retries": &v},
 		},
 		internal: mock,
 	}
@@ -441,9 +442,8 @@ func TestExecInternal_SubmitSucceedImmediately(t *testing.T) {
 		postResponses: []mockResponse{{body: succeedBody}},
 	}
 	conn := newTestConnWithRetries(mock, 3)
-	id := jobId{ID: "test-imm", Workspace: "ws"}
 
-	result, err := conn.execInternal(context.Background(), "select 1\n;", id, nil)
+	result, err := conn.execInternal(context.Background(), "select 1\n;", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -461,9 +461,8 @@ func TestExecInternal_SubmitFailedImmediately(t *testing.T) {
 		postResponses: []mockResponse{{body: failedBody}},
 	}
 	conn := newTestConnWithRetries(mock, 3)
-	id := jobId{ID: "test-fail-imm", Workspace: "ws"}
 
-	result, err := conn.execInternal(context.Background(), "bad sql\n;", id, nil)
+	result, err := conn.execInternal(context.Background(), "bad sql\n;", nil)
 	if err == nil {
 		t.Fatal("expected error for FAILED job")
 	}
@@ -478,9 +477,8 @@ func TestExecInternal_NeedReExecute(t *testing.T) {
 		postResponses: []mockResponse{{body: reExecBody}},
 	}
 	conn := newTestConnWithRetries(mock, 3)
-	id := jobId{ID: "test-reexec", Workspace: "ws"}
 
-	_, err := conn.execInternal(context.Background(), "select 1\n;", id, nil)
+	_, err := conn.execInternal(context.Background(), "select 1\n;", nil)
 	if err == nil {
 		t.Fatal("expected reExecuteError")
 	}
@@ -499,9 +497,8 @@ func TestExecInternal_SubmitNetworkErrorRetryThenSucceed(t *testing.T) {
 		},
 	}
 	conn := newTestConnWithRetries(mock, 5)
-	id := jobId{ID: "test-net-retry", Workspace: "ws"}
 
-	result, err := conn.execInternal(context.Background(), "select 1\n;", id, nil)
+	result, err := conn.execInternal(context.Background(), "select 1\n;", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -524,9 +521,8 @@ func TestExecInternal_RequestNotSubmittedRetry(t *testing.T) {
 		},
 	}
 	conn := newTestConnWithRetries(mock, 5)
-	id := jobId{ID: "test-not-submitted", Workspace: "ws"}
 
-	result, err := conn.execInternal(context.Background(), "select 1\n;", id, nil)
+	result, err := conn.execInternal(context.Background(), "select 1\n;", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -541,9 +537,8 @@ func TestExecInternal_JobAlreadyExistFirstAttempt(t *testing.T) {
 		postResponses: []mockResponse{{body: alreadyExist}},
 	}
 	conn := newTestConnWithRetries(mock, 3)
-	id := jobId{ID: "test-already-exist", Workspace: "ws"}
 
-	result, err := conn.execInternal(context.Background(), "select 1\n;", id, nil)
+	result, err := conn.execInternal(context.Background(), "select 1\n;", nil)
 	if err == nil {
 		t.Fatal("expected error for JOB_ALREADY_EXIST on first attempt")
 	}
@@ -564,9 +559,8 @@ func TestExecInternal_SubmitThenPollRunningThenSucceed(t *testing.T) {
 		},
 	}
 	conn := newTestConnWithRetries(mock, 3)
-	id := jobId{ID: "test-poll", Workspace: "ws"}
 
-	result, err := conn.execInternal(context.Background(), "select 1\n;", id, nil)
+	result, err := conn.execInternal(context.Background(), "select 1\n;", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -585,9 +579,8 @@ func TestExecInternal_AllRetriesExhausted(t *testing.T) {
 		},
 	}
 	conn := newTestConnWithRetries(mock, 3)
-	id := jobId{ID: "test-exhausted", Workspace: "ws"}
 
-	result, err := conn.execInternal(context.Background(), "select 1\n;", id, nil)
+	result, err := conn.execInternal(context.Background(), "select 1\n;", nil)
 	if err == nil {
 		t.Fatal("expected error after all retries exhausted")
 	}
@@ -684,5 +677,470 @@ func TestJobNotExistError(t *testing.T) {
 	// regular error should not match
 	if isJobNotExistError(errors.New("something")) {
 		t.Error("regular error should not be jobNotExistError")
+	}
+}
+
+// ==================== capturingMockClient ====================
+
+// capturingMockClient captures the request body for assertion
+type capturingMockClient struct {
+	postResponses []mockResponse
+	callIndex     int
+	lastBody      []byte
+}
+
+func (m *capturingMockClient) Post(_ context.Context, _ *url.URL, _ map[string]string, body []byte, _ time.Duration) (*http.Response, error) {
+	m.lastBody = make([]byte, len(body))
+	copy(m.lastBody, body)
+	if m.callIndex >= len(m.postResponses) {
+		return nil, errors.New("no more mock responses")
+	}
+	resp := m.postResponses[m.callIndex]
+	m.callIndex++
+	if resp.err != nil {
+		return nil, resp.err
+	}
+	return &http.Response{
+		StatusCode: 200,
+		Body:       io.NopCloser(bytes.NewReader(resp.body)),
+	}, nil
+}
+
+func (m *capturingMockClient) Get(_ context.Context, _ *url.URL, _ map[string]string, _ time.Duration) (*http.Response, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (m *capturingMockClient) Close() error { return nil }
+
+// helper to build a test conn with full config fields
+func newTestConnWithConfig(mock InternalClient, cfg *Config) *ClickzettaConn {
+	retries := "3"
+	if cfg.Params == nil {
+		cfg.Params = map[string]*string{}
+	}
+	if _, ok := cfg.Params["sdk.query.max.retries"]; !ok {
+		cfg.Params["sdk.query.max.retries"] = &retries
+	}
+	if cfg.Service == "" {
+		cfg.Service = "http://localhost"
+	}
+	return &ClickzettaConn{
+		ctx:      context.Background(),
+		cfg:      cfg,
+		internal: mock,
+	}
+}
+
+// helper to extract a nested JSON string value using fastjson
+func jsonStr(data []byte, keys ...string) string {
+	v, err := fastjson.ParseBytes(data)
+	if err != nil {
+		return ""
+	}
+	for _, k := range keys {
+		v = v.Get(k)
+		if v == nil {
+			return ""
+		}
+	}
+	s := v.String()
+	// strip quotes
+	if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' {
+		return s[1 : len(s)-1]
+	}
+	return s
+}
+
+// helper to extract a JSON string array using fastjson
+func jsonStrArray(data []byte, keys ...string) []string {
+	v, err := fastjson.ParseBytes(data)
+	if err != nil {
+		return nil
+	}
+	for _, k := range keys {
+		v = v.Get(k)
+		if v == nil {
+			return nil
+		}
+	}
+	arr, err := v.Array()
+	if err != nil {
+		return nil
+	}
+	result := make([]string, len(arr))
+	for i, item := range arr {
+		s := item.String()
+		if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' {
+			s = s[1 : len(s)-1]
+		}
+		result[i] = s
+	}
+	return result
+}
+
+// ==================== TestExecInternal_ContextFlags ====================
+
+func TestExecInternal_DefaultValues(t *testing.T) {
+	succeedBody := []byte(`{"status":{"state":"SUCCEED"}}`)
+	mock := &capturingMockClient{
+		postResponses: []mockResponse{{body: succeedBody}},
+	}
+	conn := newTestConnWithConfig(mock, &Config{
+		Workspace:      "default_ws",
+		VirtualCluster: "default_vc",
+		Schema:         "public",
+	})
+
+	_, err := conn.execInternal(context.Background(), "select 1\n;", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// verify jobId.workspace
+	ws := jsonStr(mock.lastBody, "jobDesc", "jobId", "workspace")
+	if ws != "default_ws" {
+		t.Errorf("jobId.workspace = %q, want %q", ws, "default_ws")
+	}
+
+	// verify virtualCluster
+	vc := jsonStr(mock.lastBody, "jobDesc", "virtualCluster")
+	if vc != "default_vc" {
+		t.Errorf("virtualCluster = %q, want %q", vc, "default_vc")
+	}
+
+	// verify defaultNamespace = [workspace, schema]
+	ns := jsonStrArray(mock.lastBody, "jobDesc", "sqlJob", "defaultNamespace")
+	if len(ns) != 2 || ns[0] != "default_ws" || ns[1] != "public" {
+		t.Errorf("defaultNamespace = %v, want [default_ws, public]", ns)
+	}
+}
+
+func TestExecInternal_ContextWorkspaceAffectsJobId(t *testing.T) {
+	succeedBody := []byte(`{"status":{"state":"SUCCEED"}}`)
+	mock := &capturingMockClient{
+		postResponses: []mockResponse{{body: succeedBody}},
+	}
+	conn := newTestConnWithConfig(mock, &Config{
+		Workspace:      "default_ws",
+		VirtualCluster: "default_vc",
+		Schema:         "public",
+	})
+
+	ctx := WithDriverFlags(context.Background(), DriverFlags{
+		"workspace": "ctx_ws",
+	})
+	_, err := conn.execInternal(ctx, "select 1\n;", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// jobId.workspace should use context value
+	ws := jsonStr(mock.lastBody, "jobDesc", "jobId", "workspace")
+	if ws != "ctx_ws" {
+		t.Errorf("jobId.workspace = %q, want %q", ws, "ctx_ws")
+	}
+
+	// defaultNamespace catalog should also be ctx_ws (no separate catalog flag)
+	ns := jsonStrArray(mock.lastBody, "jobDesc", "sqlJob", "defaultNamespace")
+	if len(ns) != 2 || ns[0] != "ctx_ws" || ns[1] != "public" {
+		t.Errorf("defaultNamespace = %v, want [ctx_ws, public]", ns)
+	}
+}
+
+func TestExecInternal_ContextCatalogOverridesWorkspace(t *testing.T) {
+	succeedBody := []byte(`{"status":{"state":"SUCCEED"}}`)
+	mock := &capturingMockClient{
+		postResponses: []mockResponse{{body: succeedBody}},
+	}
+	conn := newTestConnWithConfig(mock, &Config{
+		Workspace:      "default_ws",
+		VirtualCluster: "default_vc",
+		Schema:         "public",
+	})
+
+	ctx := WithDriverFlags(context.Background(), DriverFlags{
+		"workspace": "ctx_ws",
+		"catalog":   "ctx_catalog",
+	})
+	_, err := conn.execInternal(ctx, "select 1\n;", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// jobId.workspace should use context workspace
+	ws := jsonStr(mock.lastBody, "jobDesc", "jobId", "workspace")
+	if ws != "ctx_ws" {
+		t.Errorf("jobId.workspace = %q, want %q", ws, "ctx_ws")
+	}
+
+	// defaultNamespace catalog should use context catalog (independent of workspace)
+	ns := jsonStrArray(mock.lastBody, "jobDesc", "sqlJob", "defaultNamespace")
+	if len(ns) != 2 || ns[0] != "ctx_catalog" || ns[1] != "public" {
+		t.Errorf("defaultNamespace = %v, want [ctx_catalog, public]", ns)
+	}
+}
+
+func TestExecInternal_ContextCatalogOnlyWithoutWorkspace(t *testing.T) {
+	succeedBody := []byte(`{"status":{"state":"SUCCEED"}}`)
+	mock := &capturingMockClient{
+		postResponses: []mockResponse{{body: succeedBody}},
+	}
+	conn := newTestConnWithConfig(mock, &Config{
+		Workspace:      "default_ws",
+		VirtualCluster: "default_vc",
+		Schema:         "public",
+	})
+
+	// only set catalog, not workspace
+	ctx := WithDriverFlags(context.Background(), DriverFlags{
+		"catalog": "my_catalog",
+	})
+	_, err := conn.execInternal(ctx, "select 1\n;", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// jobId.workspace should remain default (no workspace flag)
+	ws := jsonStr(mock.lastBody, "jobDesc", "jobId", "workspace")
+	if ws != "default_ws" {
+		t.Errorf("jobId.workspace = %q, want %q", ws, "default_ws")
+	}
+
+	// defaultNamespace catalog should use context catalog
+	ns := jsonStrArray(mock.lastBody, "jobDesc", "sqlJob", "defaultNamespace")
+	if len(ns) != 2 || ns[0] != "my_catalog" || ns[1] != "public" {
+		t.Errorf("defaultNamespace = %v, want [my_catalog, public]", ns)
+	}
+}
+
+func TestExecInternal_ContextVirtualCluster(t *testing.T) {
+	succeedBody := []byte(`{"status":{"state":"SUCCEED"}}`)
+	mock := &capturingMockClient{
+		postResponses: []mockResponse{{body: succeedBody}},
+	}
+	conn := newTestConnWithConfig(mock, &Config{
+		Workspace:      "default_ws",
+		VirtualCluster: "default_vc",
+		Schema:         "public",
+	})
+
+	ctx := WithDriverFlags(context.Background(), DriverFlags{
+		"virtualCluster": "ctx_vc",
+	})
+	_, err := conn.execInternal(ctx, "select 1\n;", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	vc := jsonStr(mock.lastBody, "jobDesc", "virtualCluster")
+	if vc != "ctx_vc" {
+		t.Errorf("virtualCluster = %q, want %q", vc, "ctx_vc")
+	}
+}
+
+func TestExecInternal_ContextSchema(t *testing.T) {
+	succeedBody := []byte(`{"status":{"state":"SUCCEED"}}`)
+	mock := &capturingMockClient{
+		postResponses: []mockResponse{{body: succeedBody}},
+	}
+	conn := newTestConnWithConfig(mock, &Config{
+		Workspace:      "default_ws",
+		VirtualCluster: "default_vc",
+		Schema:         "public",
+	})
+
+	ctx := WithDriverFlags(context.Background(), DriverFlags{
+		"schema": "ctx_schema",
+	})
+	_, err := conn.execInternal(ctx, "select 1\n;", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	ns := jsonStrArray(mock.lastBody, "jobDesc", "sqlJob", "defaultNamespace")
+	if len(ns) != 2 || ns[0] != "default_ws" || ns[1] != "ctx_schema" {
+		t.Errorf("defaultNamespace = %v, want [default_ws, ctx_schema]", ns)
+	}
+}
+
+func TestExecInternal_AllContextFlagsTogether(t *testing.T) {
+	succeedBody := []byte(`{"status":{"state":"SUCCEED"}}`)
+	mock := &capturingMockClient{
+		postResponses: []mockResponse{{body: succeedBody}},
+	}
+	conn := newTestConnWithConfig(mock, &Config{
+		Workspace:      "default_ws",
+		VirtualCluster: "default_vc",
+		Schema:         "public",
+	})
+
+	ctx := WithDriverFlags(context.Background(), DriverFlags{
+		"workspace":      "ctx_ws",
+		"catalog":        "ctx_catalog",
+		"virtualCluster": "ctx_vc",
+		"schema":         "ctx_schema",
+	})
+	_, err := conn.execInternal(ctx, "select 1\n;", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// jobId.workspace = ctx_ws
+	ws := jsonStr(mock.lastBody, "jobDesc", "jobId", "workspace")
+	if ws != "ctx_ws" {
+		t.Errorf("jobId.workspace = %q, want %q", ws, "ctx_ws")
+	}
+
+	// virtualCluster = ctx_vc
+	vc := jsonStr(mock.lastBody, "jobDesc", "virtualCluster")
+	if vc != "ctx_vc" {
+		t.Errorf("virtualCluster = %q, want %q", vc, "ctx_vc")
+	}
+
+	// defaultNamespace = [ctx_catalog, ctx_schema]
+	ns := jsonStrArray(mock.lastBody, "jobDesc", "sqlJob", "defaultNamespace")
+	if len(ns) != 2 || ns[0] != "ctx_catalog" || ns[1] != "ctx_schema" {
+		t.Errorf("defaultNamespace = %v, want [ctx_catalog, ctx_schema]", ns)
+	}
+}
+
+func TestExecInternal_ConfigCatalogParam(t *testing.T) {
+	succeedBody := []byte(`{"status":{"state":"SUCCEED"}}`)
+	mock := &capturingMockClient{
+		postResponses: []mockResponse{{body: succeedBody}},
+	}
+	catalogVal := "config_catalog"
+	conn := newTestConnWithConfig(mock, &Config{
+		Workspace:      "default_ws",
+		VirtualCluster: "default_vc",
+		Schema:         "public",
+		Params:         map[string]*string{"catalog": &catalogVal},
+	})
+
+	_, err := conn.execInternal(context.Background(), "select 1\n;", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// defaultNamespace catalog should use Config.Params["catalog"]
+	ns := jsonStrArray(mock.lastBody, "jobDesc", "sqlJob", "defaultNamespace")
+	if len(ns) != 2 || ns[0] != "config_catalog" || ns[1] != "public" {
+		t.Errorf("defaultNamespace = %v, want [config_catalog, public]", ns)
+	}
+}
+
+func TestExecInternal_ContextCatalogOverridesConfigCatalog(t *testing.T) {
+	succeedBody := []byte(`{"status":{"state":"SUCCEED"}}`)
+	mock := &capturingMockClient{
+		postResponses: []mockResponse{{body: succeedBody}},
+	}
+	catalogVal := "config_catalog"
+	conn := newTestConnWithConfig(mock, &Config{
+		Workspace:      "default_ws",
+		VirtualCluster: "default_vc",
+		Schema:         "public",
+		Params:         map[string]*string{"catalog": &catalogVal},
+	})
+
+	ctx := WithDriverFlags(context.Background(), DriverFlags{
+		"catalog": "ctx_catalog",
+	})
+	_, err := conn.execInternal(ctx, "select 1\n;", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// context catalog should override config catalog
+	ns := jsonStrArray(mock.lastBody, "jobDesc", "sqlJob", "defaultNamespace")
+	if len(ns) != 2 || ns[0] != "ctx_catalog" || ns[1] != "public" {
+		t.Errorf("defaultNamespace = %v, want [ctx_catalog, public]", ns)
+	}
+}
+
+func TestExecInternal_FlagsNotLeakIntoHints(t *testing.T) {
+	succeedBody := []byte(`{"status":{"state":"SUCCEED"}}`)
+	mock := &capturingMockClient{
+		postResponses: []mockResponse{{body: succeedBody}},
+	}
+	conn := newTestConnWithConfig(mock, &Config{
+		Workspace:      "default_ws",
+		VirtualCluster: "default_vc",
+		Schema:         "public",
+	})
+
+	ctx := WithDriverFlags(context.Background(), DriverFlags{
+		"workspace":      "ctx_ws",
+		"catalog":        "ctx_catalog",
+		"virtualCluster": "ctx_vc",
+		"schema":         "ctx_schema",
+		"custom_hint":    "hint_value",
+	})
+	_, err := conn.execInternal(ctx, "select 1\n;", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	body := mock.lastBody
+	parsed, _ := fastjson.ParseBytes(body)
+	hints := parsed.Get("jobDesc", "sqlJob", "sqlConfig", "hint")
+	if hints == nil {
+		t.Fatal("hints not found in request")
+	}
+
+	// reserved flags should NOT appear in hints
+	for _, key := range []string{"workspace", "catalog", "virtualCluster", "schema"} {
+		if hints.Get(key) != nil {
+			t.Errorf("reserved flag %q should not appear in hints", key)
+		}
+	}
+
+	// custom_hint SHOULD appear in hints
+	customHint := hints.Get("custom_hint")
+	if customHint == nil {
+		t.Error("custom_hint should appear in hints")
+	} else {
+		val := customHint.String()
+		if val != `"hint_value"` {
+			t.Errorf("custom_hint = %s, want %q", val, "hint_value")
+		}
+	}
+}
+
+func TestExecInternal_EmptyContextFlagsUseDefaults(t *testing.T) {
+	succeedBody := []byte(`{"status":{"state":"SUCCEED"}}`)
+	mock := &capturingMockClient{
+		postResponses: []mockResponse{{body: succeedBody}},
+	}
+	conn := newTestConnWithConfig(mock, &Config{
+		Workspace:      "default_ws",
+		VirtualCluster: "default_vc",
+		Schema:         "public",
+	})
+
+	// set flags with empty values — should not override defaults
+	ctx := WithDriverFlags(context.Background(), DriverFlags{
+		"workspace":      "",
+		"catalog":        "",
+		"virtualCluster": "",
+		"schema":         "",
+	})
+	_, err := conn.execInternal(ctx, "select 1\n;", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	ws := jsonStr(mock.lastBody, "jobDesc", "jobId", "workspace")
+	if ws != "default_ws" {
+		t.Errorf("jobId.workspace = %q, want %q (empty flag should not override)", ws, "default_ws")
+	}
+
+	vc := jsonStr(mock.lastBody, "jobDesc", "virtualCluster")
+	if vc != "default_vc" {
+		t.Errorf("virtualCluster = %q, want %q (empty flag should not override)", vc, "default_vc")
+	}
+
+	ns := jsonStrArray(mock.lastBody, "jobDesc", "sqlJob", "defaultNamespace")
+	if len(ns) != 2 || ns[0] != "default_ws" || ns[1] != "public" {
+		t.Errorf("defaultNamespace = %v, want [default_ws, public] (empty flags should not override)", ns)
 	}
 }

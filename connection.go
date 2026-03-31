@@ -96,15 +96,7 @@ func (conn *ClickzettaConn) exec(
 	// CZLH-57015: at most 1 re-execute with a new jobId (aligned with Java)
 	const maxReExecute = 2
 	for attempt := 0; attempt < maxReExecute; attempt++ {
-		id := formatJobId()
-		logger.WithContext(ctx).Infof("jobId: %v (attempt %d)", id, attempt+1)
-		jid := jobId{
-			ID:         id,
-			Workspace:  conn.cfg.Workspace,
-			InstanceId: 0,
-		}
-
-		res, err := conn.execInternal(ctx, query, jid, bindings)
+		res, err := conn.execInternal(ctx, query, bindings)
 		if err != nil {
 			// check if re-execute is needed (CZLH-57015: regenerate jobId and retry)
 			if _, ok := err.(*reExecuteError); ok {
@@ -177,7 +169,22 @@ func getResponseErrorCode(jsonValue *fastjson.Value) string {
 	return ""
 }
 
-func (conn *ClickzettaConn) execInternal(ctx context.Context, query string, id jobId, bindings []driver.NamedValue) (*execResponse, error) {
+func (conn *ClickzettaConn) execInternal(ctx context.Context, query string, bindings []driver.NamedValue) (*execResponse, error) {
+	flags := GetDriverFlags(ctx)
+
+	// resolve workspace from context flags, fallback to config
+	workspace := conn.cfg.Workspace
+	if v, ok := flags["workspace"]; ok && v != "" {
+		workspace = v
+	}
+
+	// construct jobId inside execInternal so context-level workspace takes effect
+	id := jobId{
+		ID:         formatJobId(),
+		Workspace:  workspace,
+		InstanceId: 0,
+	}
+
 	logger.WithContext(ctx).Infof("execInternal: %v with jobid: %v", query, id.ID)
 	finalResponse := &execResponse{}
 	finalResponse.Data.JobId = id.ID
@@ -204,10 +211,9 @@ func (conn *ClickzettaConn) execInternal(ctx context.Context, query string, id j
 		}
 		hints[hintKV[0]] = hintKV[1]
 	}
-	flags := GetDriverFlags(ctx)
 	for k, v := range flags {
 		switch k {
-		case "workspace", "virtualCluster", "schema":
+		case "workspace", "virtualCluster", "schema", "catalog":
 			// these are handled separately as structured request parameters
 			continue
 		default:
@@ -250,11 +256,11 @@ func (conn *ClickzettaConn) execInternal(ctx context.Context, query string, id j
 		schema = v
 	}
 	sqls := append(make([]string, 0), query)
-	catalog := conn.cfg.Workspace
+	catalog := workspace
 	if v, ok := conn.cfg.Params["catalog"]; ok && v != nil {
 		catalog = *v
 	}
-	if v, ok := flags["workspace"]; ok && v != "" {
+	if v, ok := flags["catalog"]; ok && v != "" {
 		catalog = v
 	}
 	virtualCluster := conn.cfg.VirtualCluster
