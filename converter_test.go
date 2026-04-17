@@ -143,3 +143,50 @@ func TestArrowToValue_Map_StringInt_FallbackNormalize(t *testing.T) {
 	assert.Equal(t, float64(10), got["n"]) // json number is float64
 	assert.Equal(t, float64(20), got["m"]) // json number is float64
 }
+
+func TestGoTypeToClickzetta_TimestampNTZ(t *testing.T) {
+	assert.Equal(t, clickzettaType(TIMESTAMP_NTZ), goTypeToClickzetta(time.Now(), clickzettaType(TIMESTAMP_NTZ)))
+}
+
+func TestArrowToValue_TimestampNTZ(t *testing.T) {
+	mem := memory.DefaultAllocator
+	tsType := &arrow.TimestampType{Unit: arrow.Microsecond}
+	builder := array.NewTimestampBuilder(mem, tsType)
+	defer builder.Release()
+
+	// 2024-06-15 12:30:45 UTC as microseconds
+	expected := time.Date(2024, 6, 15, 12, 30, 45, 0, time.UTC)
+	usec := arrow.Timestamp(expected.UnixMicro())
+	builder.Append(usec)
+	builder.AppendNull()
+	builder.Append(usec)
+
+	arr := builder.NewTimestampArray()
+	defer arr.Release()
+
+	meta := execResponseColumnType{Type: "TIMESTAMP_NTZ"}
+	dest := make([]interface{}, arr.Len())
+	err := arrowToValue(dest, meta, arr, time.Local, false)
+	assert.NoError(t, err)
+
+	// TIMESTAMP_NTZ should NOT convert to UTC (no .UTC() call)
+	got, ok := dest[0].(time.Time)
+	assert.True(t, ok)
+	assert.Equal(t, expected.UnixMicro(), got.UnixMicro())
+
+	// null value should remain nil
+	assert.Equal(t, nil, dest[1])
+
+	// third value should also match
+	got2, ok := dest[2].(time.Time)
+	assert.True(t, ok)
+	assert.Equal(t, expected.UnixMicro(), got2.UnixMicro())
+}
+
+func TestGetClickzettaType_TimestampNTZ(t *testing.T) {
+	assert.Equal(t, TIMESTAMP_NTZ, getclickzettaType("TIMESTAMP_NTZ"))
+}
+
+func TestTimestampNTZ_String(t *testing.T) {
+	assert.Equal(t, "TIMESTAMP_NTZ", TIMESTAMP_NTZ.String())
+}

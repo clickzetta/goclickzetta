@@ -15,6 +15,7 @@ const (
 	SMALLINT
 	STRING
 	TIMESTAMP_LTZ
+	TIMESTAMP_NTZ
 	TINYINT
 	ARRAY
 	MAP
@@ -26,7 +27,7 @@ const (
 
 var clickzettaTypes = [...]string{"INT64", "BOOLEAN", "CHAR", "DATE", "DECIMAL",
 	"FLOAT64", "FLOAT32", "INT32", "INTERVAL", "INT16",
-	"STRING", "TIMESTAMP_LTZ", "INT8", "ARRAY", "MAP", "STRUCT", "VARCHAR", "NOT_SUPPORTED",
+	"STRING", "TIMESTAMP_LTZ", "TIMESTAMP_NTZ", "INT8", "ARRAY", "MAP", "STRUCT", "VARCHAR", "NOT_SUPPORTED",
 	"JSON"}
 
 func (st clickzettaType) String() string {
