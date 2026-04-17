@@ -639,6 +639,13 @@ func arrowToValue(
 		}
 
 		return err
+	case TIMESTAMP_NTZ:
+		for i, t := range srcValue.(*array.Timestamp).TimestampValues() {
+			if !srcValue.IsNull(i) {
+				destcol[i] = t.ToTime(arrow.Microsecond)
+			}
+		}
+		return err
 	}
 
 	return fmt.Errorf("unsupported data type")
