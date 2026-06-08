@@ -58,6 +58,11 @@ func (cfg *Config) normalize() error {
 		cfg.Schema = "public"
 	}
 
+	// If token is provided (magic_token), skip username/password validation
+	if cfg.Token != "" {
+		return nil
+	}
+
 	if cfg.UserName == "" {
 		return errors.New("missing username")
 	}
@@ -240,6 +245,8 @@ func parseDSNParams(cfg *Config, params string) (err error) {
 			cfg.Instance = value
 		case "workspace":
 			cfg.Workspace = value
+		case "magic_token", "token":
+			cfg.Token = value
 		default:
 			if cfg.Params == nil {
 				cfg.Params = make(map[string]*string)

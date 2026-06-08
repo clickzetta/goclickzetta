@@ -985,6 +985,11 @@ func buildClickzettaConn(ctx context.Context, config Config) (*ClickzettaConn, e
 	cli.client = &http.Client{Transport: transport}
 	conn.internal = cli
 
+	// If token is already provided (via magic_token), skip login
+	if config.Token != "" {
+		return conn, nil
+	}
+
 	loginPrarams := make(map[string]string)
 	loginPrarams["username"] = config.UserName
 	loginPrarams["password"] = config.Password
