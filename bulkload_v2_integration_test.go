@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/shopspring/decimal"
 )
@@ -21,64 +22,122 @@ func skipIfNoDSN(t *testing.T) string {
 	return dsn
 }
 
-func TestBulkloadV2_Append(t *testing.T) {
-	dsn := skipIfNoDSN(t)
+func newBulkloadV2TestTable(t *testing.T, dsn, suffix string) (*sql.DB, string) {
+	t.Helper()
+
+	db, err := sql.Open("clickzetta", dsn)
+	if err != nil {
+		t.Fatalf("open bulkload integration database: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("close bulkload integration database: %v", err)
+		}
+	})
+
+	tableName := fmt.Sprintf("go_sdk_bulkload_%s_%d", suffix, time.Now().UnixNano())
+	createSQL := fmt.Sprintf(`CREATE TABLE %s (
+		id BIGINT,
+		name STRING,
+		amount BIGINT,
+		cost DECIMAL(18, 2),
+		PRIMARY KEY (id)
+	)`, tableName)
+	if _, err := db.Exec(createSQL); err != nil {
+		t.Fatalf("create bulkload integration table %s: %v", tableName, err)
+	}
+	t.Cleanup(func() {
+		if _, err := db.Exec(fmt.Sprintf("DROP TABLE IF EXISTS %s", tableName)); err != nil {
+			t.Errorf("drop bulkload integration table %s: %v", tableName, err)
+		}
+	})
+
+	return db, tableName
+}
+
+func newBulkloadV2TestConnection(t *testing.T, dsn string) *ClickzettaConn {
+	t.Helper()
+
 	conn, err := connect(dsn)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("open bulkload integration connection: %v", err)
 	}
+	t.Cleanup(func() {
+		if err := conn.Close(); err != nil {
+			t.Errorf("close bulkload integration connection: %v", err)
+		}
+	})
+	return conn
+}
+
+func appendBulkloadV2TestRows(t *testing.T, conn *ClickzettaConn, tableName, namePrefix string, startID int64, rowCount int) {
+	t.Helper()
 
 	stream, err := conn.CreateBulkloadStream(BulkloadOptions{
-		Table:     "go_sdk_bulkload_test",
+		Table:     tableName,
 		Operation: APPEND,
 	})
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("create bulkload stream: %v", err)
 	}
 
 	writer, err := stream.CreateWriter(0)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("create bulkload writer: %v", err)
 	}
-
-	for i := 0; i < 5; i++ {
+	for index := 0; index < rowCount; index++ {
 		row := writer.CreateRow()
-		row.SetBigint("id", int64(i+100))
-		row.SetString("name", fmt.Sprintf("go_v2_test_%d", i))
-		row.SetBigint("amount", int64(i*10))
-		row.SetDecimal("cost", decimal.NewFromFloat(float64(i)*1.5))
+		row.SetBigint("id", startID+int64(index))
+		row.SetString("name", fmt.Sprintf("%s_%d", namePrefix, index))
+		row.SetBigint("amount", int64(index*10))
+		row.SetDecimal("cost", decimal.NewFromFloat(float64(index)*1.5))
 		if err := writer.WriteRow(row); err != nil {
-			t.Fatal(err)
+			t.Fatalf("write bulkload row: %v", err)
 		}
 	}
 
 	if err := writer.Close(); err != nil {
-		t.Fatal(err)
+		t.Fatalf("close bulkload writer: %v", err)
 	}
-
-	// Verify committables are produced
-	comms := writer.GetCommittables()
-	if len(comms) == 0 {
+	committables := writer.GetCommittables()
+	if len(committables) == 0 {
 		t.Fatal("expected committables after writer close")
 	}
-	t.Logf("Writer produced %d committable(s) with %d file(s)", len(comms), len(comms[0].Files))
+	t.Logf("Writer produced %d committable(s) with %d volume file(s)", len(committables), len(committables[0].DstFiles))
 
-	// Commit via stream.Close()
 	if err := stream.Close(); err != nil {
-		t.Fatal(err)
+		t.Fatalf("commit bulkload stream: %v", err)
 	}
-	t.Log("Stream committed successfully")
+}
+
+func assertBulkloadV2RowCount(t *testing.T, db *sql.DB, tableName string, expected int64) {
+	t.Helper()
+
+	var actual int64
+	if err := db.QueryRow(fmt.Sprintf("SELECT count(1) FROM %s", tableName)).Scan(&actual); err != nil {
+		t.Fatalf("count bulkload integration rows: %v", err)
+	}
+	if actual != expected {
+		t.Fatalf("expected %d rows in %s, got %d", expected, tableName, actual)
+	}
+}
+
+func TestBulkloadV2_Append(t *testing.T) {
+	dsn := skipIfNoDSN(t)
+	db, tableName := newBulkloadV2TestTable(t, dsn, "append")
+	conn := newBulkloadV2TestConnection(t, dsn)
+
+	appendBulkloadV2TestRows(t, conn, tableName, "go_v2_test", 100, 5)
+	assertBulkloadV2RowCount(t, db, tableName, 5)
 }
 
 func TestBulkloadV2_CommitterSeparate(t *testing.T) {
 	dsn := skipIfNoDSN(t)
-	conn, err := connect(dsn)
-	if err != nil {
-		t.Fatal(err)
-	}
+	db, tableName := newBulkloadV2TestTable(t, dsn, "committer")
+	conn := newBulkloadV2TestConnection(t, dsn)
 
 	stream, err := conn.CreateBulkloadStream(BulkloadOptions{
-		Table:     "go_sdk_bulkload_test",
+		Table:     tableName,
 		Operation: APPEND,
 	})
 	if err != nil {
@@ -110,41 +169,26 @@ func TestBulkloadV2_CommitterSeparate(t *testing.T) {
 		t.Fatal(err)
 	}
 	stream.Closed = true
+	assertBulkloadV2RowCount(t, db, tableName, 1)
 	t.Log("Explicit committer committed successfully")
 }
 
 func TestBulkloadV2_VerifyData(t *testing.T) {
 	dsn := skipIfNoDSN(t)
-	db, err := sql.Open("clickzetta", dsn)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db, tableName := newBulkloadV2TestTable(t, dsn, "verify")
+	conn := newBulkloadV2TestConnection(t, dsn)
 
-	rows, err := db.Query("select count(1) from go_sdk_bulkload_test where name like 'go_v2_%'")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer rows.Close()
-	if rows.Next() {
-		var count int64
-		rows.Scan(&count)
-		t.Logf("Rows with go_v2_ prefix: %d", count)
-		if count == 0 {
-			t.Error("expected some rows written by V2 tests")
-		}
-	}
+	appendBulkloadV2TestRows(t, conn, tableName, "go_v2_verify", 200, 3)
+	assertBulkloadV2RowCount(t, db, tableName, 3)
 }
 
 func TestBulkloadV2_WriterReuse(t *testing.T) {
 	dsn := skipIfNoDSN(t)
-	conn, err := connect(dsn)
-	if err != nil {
-		t.Fatal(err)
-	}
+	db, tableName := newBulkloadV2TestTable(t, dsn, "reuse")
+	conn := newBulkloadV2TestConnection(t, dsn)
 
 	stream, err := conn.CreateBulkloadStream(BulkloadOptions{
-		Table:     "go_sdk_bulkload_test",
+		Table:     tableName,
 		Operation: APPEND,
 	})
 	if err != nil {
@@ -175,6 +219,7 @@ func TestBulkloadV2_WriterReuse(t *testing.T) {
 	if err := stream.Close(); err != nil {
 		t.Fatal(err)
 	}
+	assertBulkloadV2RowCount(t, db, tableName, 1)
 	t.Log("Writer reuse test passed")
 }
 

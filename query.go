@@ -122,8 +122,8 @@ func hasField(obj interface{}, field string) bool {
 	return ok
 }
 
-func (qd *execResponseData) init() error {
-	qd.parseSchema()
+func (qd *execResponseData) init(diagnostics queryDiagnostics) error {
+	qd.parseSchema(diagnostics)
 	if len(qd.HTTPResponseMessage.HttpResponseMessageResultSet.MemoryData.Data) != 0 {
 		qd.DataType = Memory
 		qd.MemoryRead = false
@@ -138,7 +138,7 @@ func (qd *execResponseData) init() error {
 	return nil
 }
 
-func (qd *execResponseData) parseSchema() {
+func (qd *execResponseData) parseSchema(diagnostics queryDiagnostics) {
 	fields := make([]execResponseColumnType, 0)
 	for _, field := range qd.HTTPResponseMessage.HttpResponseMessageResultSet.MetaData.Fields {
 		if hasField(field.FieldType, "CharTypeInfo") {
@@ -154,12 +154,12 @@ func (qd *execResponseData) parseSchema() {
 		} else if hasField(field.FieldType, "DecimalTypeInfo") {
 			precision, err := strconv.ParseInt(field.FieldType.DecimalTypeInfo.Precision, 10, 64)
 			if err != nil {
-				logger.WithContext(nil).Errorf("error: %v", err)
+				diagnostics.errorf("error: %v", err)
 				return
 			}
 			scale, err := strconv.ParseInt(field.FieldType.DecimalTypeInfo.Scale, 10, 64)
 			if err != nil {
-				logger.WithContext(nil).Errorf("error: %v", err)
+				diagnostics.errorf("error: %v", err)
 				return
 			}
 			fields = append(fields, execResponseColumnType{
@@ -196,37 +196,51 @@ func (qd *execResponseData) parseSchema() {
 	qd.Schema = fields
 }
 
-func (qd *execResponseData) readMemoryData() error {
+func (qd *execResponseData) readMemoryData(diagnostics queryDiagnostics) error {
 	qd.Data = make([]interface{}, 0)
-	for _, data := range qd.HTTPResponseMessage.HttpResponseMessageResultSet.MemoryData.Data {
+	for index, data := range qd.HTTPResponseMessage.HttpResponseMessageResultSet.MemoryData.Data {
+		readerStart := diagnostics.trace.start()
 		buffer := base64.NewDecoder(base64.StdEncoding, strings.NewReader(data))
 		reader, err := ipc.NewReader(buffer)
 		if err != nil {
-			logger.WithContext(nil).Errorf("error: %v", err)
+			if diagnostics.trace.enabled {
+				diagnostics.trace.record(qd.JobId, "memory_ipc_reader_error", readerStart, "chunk", index, "error", err)
+			}
+			diagnostics.errorf("error: %v", err)
 			return err
 		}
-		err = arrowToRows(qd, reader)
+		if diagnostics.trace.enabled {
+			diagnostics.trace.record(qd.JobId, "memory_ipc_reader", readerStart, "chunk", index)
+		}
+		err = arrowToRows(diagnostics, qd, reader)
 		if err != nil {
-			logger.WithContext(nil).Errorf("error: %v", err)
+			diagnostics.errorf("error: %v", err)
 			return err
 		}
 	}
 	return nil
 }
 
-func arrowToRows(qd *execResponseData, reader *ipc.Reader) error {
+func arrowToRows(diagnostics queryDiagnostics, qd *execResponseData, reader *ipc.Reader) error {
+	arrowStart := diagnostics.trace.start()
 	tempDataList := make(map[int][]interface{}, 0)
+	recordCount := 0
+	valueCount := 0
 
 	for reader.Next() {
+		recordCount++
 		record := reader.Record()
 
 		for index, column := range record.Columns() {
+			if diagnostics.trace.enabled {
+				valueCount += column.Len()
+			}
 			if tempDataList[index] == nil {
 				des := make([]interface{}, column.Len())
 				timeLocation := time.Local
 				err := arrowToValue(des, qd.Schema[index], column, timeLocation, false)
 				if err != nil {
-					logger.WithContext(nil).Errorf("error: %v", err)
+					diagnostics.errorf("error: %v", err)
 					return err
 				}
 				tempDataList[index] = des
@@ -236,7 +250,7 @@ func arrowToRows(qd *execResponseData, reader *ipc.Reader) error {
 				timeLocation := time.Local
 				err := arrowToValue(des, qd.Schema[index], column, timeLocation, false)
 				if err != nil {
-					logger.WithContext(nil).Errorf("error: %v", err)
+					diagnostics.errorf("error: %v", err)
 					return err
 				}
 				tempDataList[index] = append(tempDataList[index], des...)
@@ -252,22 +266,32 @@ func arrowToRows(qd *execResponseData, reader *ipc.Reader) error {
 		}
 		qd.Data = append(qd.Data, row)
 	}
+	if diagnostics.trace.enabled {
+		diagnostics.trace.record(qd.JobId, "arrow_to_rows", arrowStart, "records", recordCount, "values", valueCount, "rows", len(qd.Data))
+	}
 	return nil
 }
 
-func (qd *execResponseData) read() error {
+func (qd *execResponseData) read(diagnostics queryDiagnostics) error {
 	if qd.DataType == Memory {
 		if qd.MemoryRead {
 			qd.Data = make([]interface{}, 0)
 			return nil
 		}
 		qd.MemoryRead = true
-		err := qd.readMemoryData()
+		memoryStart := diagnostics.trace.start()
+		err := qd.readMemoryData(diagnostics)
 		if err != nil {
-			logger.WithContext(nil).Errorf("error: %v", err)
+			if diagnostics.trace.enabled {
+				diagnostics.trace.record(qd.JobId, "read_memory_error", memoryStart, "error", err)
+			}
+			diagnostics.errorf("error: %v", err)
 			return err
 		}
 		qd.RowCount = int64(len(qd.Data))
+		if diagnostics.trace.enabled {
+			diagnostics.trace.record(qd.JobId, "read_memory", memoryStart, "chunks", len(qd.HTTPResponseMessage.HttpResponseMessageResultSet.MemoryData.Data), "rows", len(qd.Data))
+		}
 		return nil
 	} else if qd.DataType == File {
 		if len(qd.FileList) == 0 {
@@ -284,18 +308,26 @@ func (qd *execResponseData) read() error {
 		if qd.CurrentFileIndex >= len(qd.FileList) {
 			return nil
 		}
-		presignedUrl := qd.FileList[qd.CurrentFileIndex]
+		fileIndex := qd.CurrentFileIndex
+		presignedUrl := qd.FileList[fileIndex]
 		qd.CurrentFileIndex++
 
+		httpStart := diagnostics.trace.start()
 		resp, err := http.Get(presignedUrl)
 		if err != nil {
-			logger.WithContext(nil).Errorf("error: %v", err)
+			if diagnostics.trace.enabled {
+				diagnostics.trace.record(qd.JobId, "file_http_get_error", httpStart, "file_index", fileIndex, "error", err)
+			}
+			diagnostics.errorf("error: %v", err)
 			return err
 		}
 		defer resp.Body.Close()
+		if diagnostics.trace.enabled {
+			diagnostics.trace.record(qd.JobId, "file_http_get", httpStart, "file_index", fileIndex, "status", resp.StatusCode)
+		}
 
 		if resp.StatusCode != http.StatusOK {
-			logger.WithContext(nil).Errorf("failed to download file, status code: %d", resp.StatusCode)
+			diagnostics.errorf("failed to download file, status code: %d", resp.StatusCode)
 			return &ClickzettaError{
 				Number:         -1,
 				Message:        "failed to download file from presigned url",
@@ -306,14 +338,21 @@ func (qd *execResponseData) read() error {
 			}
 		}
 
+		readerStart := diagnostics.trace.start()
 		reader, err := ipc.NewReader(resp.Body)
 		if err != nil {
-			logger.WithContext(nil).Errorf("error: %v", err)
+			if diagnostics.trace.enabled {
+				diagnostics.trace.record(qd.JobId, "file_ipc_reader_error", readerStart, "file_index", fileIndex, "error", err)
+			}
+			diagnostics.errorf("error: %v", err)
 			return err
 		}
-		err = arrowToRows(qd, reader)
+		if diagnostics.trace.enabled {
+			diagnostics.trace.record(qd.JobId, "file_ipc_reader", readerStart, "file_index", fileIndex)
+		}
+		err = arrowToRows(diagnostics, qd, reader)
 		if err != nil {
-			logger.WithContext(nil).Errorf("error: %v", err)
+			diagnostics.errorf("error: %v", err)
 			return err
 		}
 

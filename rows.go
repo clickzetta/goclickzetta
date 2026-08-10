@@ -26,6 +26,7 @@ type clickzettaRows struct {
 	response          *execResponse
 	currentBatchIndex int
 	currentBatchSize  int
+	diagnostics       queryDiagnostics
 }
 
 func (rows *clickzettaRows) Close() (err error) {
@@ -46,7 +47,7 @@ func (rows *clickzettaRows) Columns() []string {
 }
 
 func (rows *clickzettaRows) Next(dest []driver.Value) error {
-	logger.Infoln("Rows.Next")
+	logger.Debugln("Rows.Next")
 	if rows.HasNextResultSet() {
 		err := rows.NextResultSet()
 		if err != nil {
@@ -77,9 +78,25 @@ func (rows *clickzettaRows) GetStatus() queryStatus {
 }
 
 func (rows *clickzettaRows) GetResultRows() error {
-	err := rows.response.Data.read()
+	readStart := rows.diagnostics.trace.start()
+	err := rows.response.Data.read(rows.diagnostics)
 	if err != nil {
+		if rows.diagnostics.trace.enabled {
+			rows.diagnostics.trace.record(rows.response.Data.JobId, "rows_data_read_error", readStart, "error", err)
+		}
 		return err
+	}
+	if rows.diagnostics.trace.enabled {
+		rows.diagnostics.trace.record(
+			rows.response.Data.JobId,
+			"rows_data_read",
+			readStart,
+			"data_type", rows.response.Data.DataType,
+			"rows", len(rows.response.Data.Data),
+			"row_count_total", rows.response.Data.RowCount,
+			"file_index", rows.response.Data.CurrentFileIndex,
+			"files", len(rows.response.Data.FileList),
+		)
 	}
 	return nil
 }

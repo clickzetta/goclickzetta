@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -121,6 +122,56 @@ func TestGetResponseErrorCode(t *testing.T) {
 				t.Errorf("getResponseErrorCode() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestGetResponseErrorMessage(t *testing.T) {
+	tests := []struct {
+		name string
+		json string
+		want string
+	}{
+		{"status.message", `{"status":{"message":"syntax error"}}`, "syntax error"},
+		{"status.errorMessage fallback", `{"status":{"errorMessage":"out of memory"}}`, "out of memory"},
+		{"respStatus.message", `{"respStatus":{"message":"request failed"}}`, "request failed"},
+		{"decode and sanitize", `{"status":{"message":"bad \"value\"\nnext line"}}`, `bad "value" next line`},
+		{"ignore non-string", `{"status":{"message":null}}`, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			value, err := fastjson.Parse(tt.json)
+			if err != nil {
+				t.Fatalf("bad test json: %v", err)
+			}
+			if got := getResponseErrorMessage(value); got != tt.want {
+				t.Errorf("getResponseErrorMessage() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestResponseErrorMessageIsBounded(t *testing.T) {
+	value, err := fastjson.Parse(fmt.Sprintf(`{"status":{"message":%q}}`, strings.Repeat("x", maxResponseErrorMessageBytes+100)))
+	if err != nil {
+		t.Fatalf("bad test json: %v", err)
+	}
+	message := getResponseErrorMessage(value)
+	if len(message) != maxResponseErrorMessageBytes {
+		t.Fatalf("message length = %d, want %d", len(message), maxResponseErrorMessageBytes)
+	}
+	if !strings.HasSuffix(message, "...") {
+		t.Fatalf("expected truncated message, got %q", message)
+	}
+}
+
+func TestFormatLoginFailureIncludesNestedCodeAndMessage(t *testing.T) {
+	value, err := fastjson.Parse(`{"status":{"errorCode":"AUTH_FAILED","message":"invalid credentials"}}`)
+	if err != nil {
+		t.Fatalf("bad test json: %v", err)
+	}
+	want := "error_code: AUTH_FAILED, message: invalid credentials"
+	if got := formatLoginFailure(value); got != want {
+		t.Fatalf("formatLoginFailure() = %q, want %q", got, want)
 	}
 }
 

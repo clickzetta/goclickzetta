@@ -227,7 +227,8 @@ func ParseDSN(dsn string) (cfg *Config, err error) {
 
 // parseDSNParams parses the DSN "query string". Values must be url.QueryEscape'ed
 func parseDSNParams(cfg *Config, params string) (err error) {
-	logger.Infof("Query String: %v\n", params)
+	// log the parameter names only: DSN values can carry credentials
+	keys := make([]string, 0)
 	for _, v := range strings.Split(params, "&") {
 		param := strings.SplitN(v, "=", 2)
 		if len(param) != 2 {
@@ -238,6 +239,7 @@ func parseDSNParams(cfg *Config, params string) (err error) {
 		if err != nil {
 			return err
 		}
+		keys = append(keys, param[0])
 		switch param[0] {
 		case "virtualcluster", "virtualCluster", "vc", "VirtualCluster", "Virtualcluster", "VC":
 			cfg.VirtualCluster = value
@@ -254,5 +256,6 @@ func parseDSNParams(cfg *Config, params string) (err error) {
 			cfg.Params[param[0]] = &value
 		}
 	}
+	logger.Debugf("parsed DSN parameters: %v", keys)
 	return
 }
