@@ -19,6 +19,7 @@ type clickzettaRows struct {
 	response          *execResponse
 	currentBatchIndex int
 	currentBatchSize  int
+	diagnostics       queryDiagnostics
 }
 
 func (rows *clickzettaRows) Close() (err error) {
@@ -39,14 +40,12 @@ func (rows *clickzettaRows) Columns() []string {
 }
 
 func (rows *clickzettaRows) Next(dest []driver.Value) error {
-	logger.Infoln("Rows.Next")
-	if rows.HasNextResultSet() {
-		err := rows.NextResultSet()
-		if err != nil {
-			return err
-		}
-	} else {
+	logger.Debugln("Rows.Next")
+	if !rows.HasNextResultSet() {
 		return io.EOF
+	}
+	if err := rows.NextResultSet(); err != nil {
+		return err
 	}
 	result := rows.response.Data.Data[rows.currentBatchIndex]
 	resList, ok := result.([]interface{})
@@ -70,9 +69,25 @@ func (rows *clickzettaRows) GetStatus() queryStatus {
 }
 
 func (rows *clickzettaRows) GetResultRows() error {
-	err := rows.response.Data.read()
+	readStart := rows.diagnostics.trace.start()
+	err := rows.response.Data.read(rows.diagnostics)
 	if err != nil {
+		if rows.diagnostics.trace.enabled {
+			rows.diagnostics.trace.record(rows.response.Data.JobId, "rows_data_read_error", readStart, "error_type", safeErrorType(err))
+		}
 		return err
+	}
+	if rows.diagnostics.trace.enabled {
+		rows.diagnostics.trace.record(
+			rows.response.Data.JobId,
+			"rows_data_read",
+			readStart,
+			"data_type", rows.response.Data.DataType,
+			"rows", len(rows.response.Data.Data),
+			"row_count_total", rows.response.Data.RowCount,
+			"file_index", rows.response.Data.CurrentFileIndex,
+			"files", len(rows.response.Data.FileList),
+		)
 	}
 	return nil
 }
@@ -82,9 +97,17 @@ func (rows *clickzettaRows) NextResultSet() error {
 	if rows.currentBatchSize > 0 && rows.currentBatchIndex < rows.currentBatchSize {
 		return nil
 	}
-	rows.currentBatchIndex = 0
-	rows.currentBatchSize = len(rows.response.Data.Data)
-	return nil
+	for rows.hasUnreadResultData() {
+		if err := rows.GetResultRows(); err != nil {
+			return err
+		}
+		rows.currentBatchIndex = 0
+		rows.currentBatchSize = len(rows.response.Data.Data)
+		if rows.currentBatchSize > 0 {
+			return nil
+		}
+	}
+	return io.EOF
 }
 
 func (rows *clickzettaRows) HasNextResultSet() bool {
@@ -92,12 +115,20 @@ func (rows *clickzettaRows) HasNextResultSet() bool {
 	if rows.currentBatchSize > 0 && rows.currentBatchIndex < rows.currentBatchSize {
 		return true
 	}
-	err := rows.GetResultRows()
-	if err != nil {
+	return rows.hasUnreadResultData()
+}
+
+func (rows *clickzettaRows) hasUnreadResultData() bool {
+	if rows == nil || rows.response == nil {
 		return false
 	}
-	if len(rows.response.Data.Data) == 0 {
+	data := &rows.response.Data
+	switch data.DataType {
+	case Memory:
+		return !data.MemoryRead
+	case File:
+		return data.CurrentFileIndex < len(data.FileList)
+	default:
 		return false
 	}
-	return true
 }

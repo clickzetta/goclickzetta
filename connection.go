@@ -11,17 +11,21 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/clickzetta/goclickzetta/protos/bulkload/ingestion"
 	"github.com/clickzetta/goclickzetta/protos/bulkload/util"
 	"github.com/golang/protobuf/jsonpb"
 	"github.com/golang/protobuf/proto"
+	rlog "github.com/sirupsen/logrus"
 	"github.com/valyala/fastjson"
 )
 
@@ -70,6 +74,102 @@ type ClickzettaConn struct {
 	internal InternalClient
 }
 
+const traceTimingFlag = "trace_timing"
+
+const (
+	maxResponseErrorCodeBytes    = 128
+	maxResponseErrorMessageBytes = 1024
+)
+
+var traceTimingEnvironmentEnabled = parseConfigBool(os.Getenv("CLICKZETTA_TRACE_TIMING"))
+
+type levelEnabledLogger interface {
+	IsLevelEnabled(level rlog.Level) bool
+}
+
+type timingTrace struct {
+	enabled bool
+	entry   *rlog.Entry
+}
+
+type queryDiagnostics struct {
+	log   *rlog.Entry
+	trace timingTrace
+}
+
+func parseConfigBool(value string) bool {
+	enabled, err := strconv.ParseBool(strings.TrimSpace(value))
+	return err == nil && enabled
+}
+
+func (conn *ClickzettaConn) traceTimingEnabled(ctx context.Context) bool {
+	if traceTimingEnvironmentEnabled {
+		return true
+	}
+	if ctx != nil {
+		if value, ok := GetDriverFlag(ctx, traceTimingFlag); ok {
+			return parseConfigBool(value)
+		}
+	}
+	if conn != nil && conn.cfg != nil && conn.cfg.Params != nil {
+		if value, ok := conn.cfg.Params[traceTimingFlag]; ok && value != nil {
+			return parseConfigBool(*value)
+		}
+	}
+	return false
+}
+
+func (conn *ClickzettaConn) newTimingTrace(ctx context.Context, entry *rlog.Entry) timingTrace {
+	if !conn.traceTimingEnabled(ctx) {
+		return timingTrace{}
+	}
+	if levelLogger, ok := logger.(levelEnabledLogger); ok && !levelLogger.IsLevelEnabled(rlog.DebugLevel) {
+		return timingTrace{}
+	}
+	if entry == nil {
+		entry = logger.WithContext(ctx)
+	}
+	return timingTrace{enabled: true, entry: entry}
+}
+
+func (conn *ClickzettaConn) newQueryDiagnostics(ctx context.Context) queryDiagnostics {
+	entry := logger.WithContext(ctx)
+	return queryDiagnostics{log: entry, trace: conn.newTimingTrace(ctx, entry)}
+}
+
+func (trace timingTrace) start() time.Time {
+	if !trace.enabled {
+		return time.Time{}
+	}
+	return time.Now()
+}
+
+func (trace timingTrace) record(jobID string, phase string, start time.Time, fields ...interface{}) {
+	if !trace.enabled || trace.entry == nil {
+		return
+	}
+	message := fmt.Sprintf("[clickzetta timing] job_id=%s phase=%s elapsed_ms=%.3f", jobID, phase, float64(time.Since(start).Microseconds())/1000.0)
+	for i := 0; i+1 < len(fields); i += 2 {
+		message += fmt.Sprintf(" %v=%v", fields[i], fields[i+1])
+	}
+	trace.entry.Debugln(message)
+}
+
+func (diagnostics queryDiagnostics) errorf(format string, args ...interface{}) {
+	if diagnostics.log != nil {
+		diagnostics.log.Errorf(format, args...)
+		return
+	}
+	logger.Errorf(format, args...)
+}
+
+func safeErrorType(err error) string {
+	if err == nil {
+		return ""
+	}
+	return fmt.Sprintf("%T", err)
+}
+
 var (
 	queryIDPattern = `[\w\-_]+`
 	queryIDRegexp  = regexp.MustCompile(queryIDPattern)
@@ -84,7 +184,8 @@ func (conn *ClickzettaConn) exec(
 	describeOnly bool,
 	bindings []driver.NamedValue) (
 	*execResponse, error) {
-	logger.WithContext(ctx).Infof("exec: %v", query)
+	logger.WithContext(ctx).Debugf("exec: query_length=%d", len(query))
+	trace := conn.newTimingTrace(ctx, nil)
 	if query == "" {
 		logger.WithContext(ctx).Errorf("empty SQL query")
 		return nil, driver.ErrSkip
@@ -96,7 +197,11 @@ func (conn *ClickzettaConn) exec(
 	// CZLH-57015: at most 1 re-execute with a new jobId (aligned with Java)
 	const maxReExecute = 2
 	for attempt := 0; attempt < maxReExecute; attempt++ {
+		execStart := trace.start()
 		res, err := conn.execInternal(ctx, query, bindings)
+		if trace.enabled {
+			trace.record(dataJobID(res), "exec_internal", execStart, "attempt", attempt+1)
+		}
 		if err != nil {
 			// check if re-execute is needed (CZLH-57015: regenerate jobId and retry)
 			if _, ok := err.(*reExecuteError); ok {
@@ -147,45 +252,133 @@ func sleepWithBackoff(ctx context.Context, intervalMs int) int {
 	return next
 }
 
-// getResponseErrorCode extracts the error code from a submit job response JSON
-func getResponseErrorCode(jsonValue *fastjson.Value) string {
+func sanitizeResponseText(value *fastjson.Value, maxBytes int) string {
+	if value == nil || maxBytes <= 0 {
+		return ""
+	}
+	raw := value.GetStringBytes()
+	if raw == nil {
+		return ""
+	}
+	return sanitizeDiagnosticText(string(raw), maxBytes)
+}
+
+func sanitizeDiagnosticText(value string, maxBytes int) string {
+	if maxBytes <= 0 {
+		return ""
+	}
+	text := strings.Map(func(character rune) rune {
+		if unicode.IsControl(character) {
+			return ' '
+		}
+		return character
+	}, strings.TrimSpace(value))
+	text = strings.Join(strings.Fields(text), " ")
+	if len(text) <= maxBytes {
+		return text
+	}
+	const marker = "..."
+	end := maxBytes - len(marker)
+	for end > 0 && !utf8.RuneStart(text[end]) {
+		end--
+	}
+	return text[:end] + marker
+}
+
+func getResponseString(jsonValue *fastjson.Value, maxBytes int, keys ...string) string {
 	if jsonValue == nil {
 		return ""
 	}
-	// check status.errorCode
-	if jsonValue.Exists("status") && jsonValue.Get("status").Exists("errorCode") {
-		code := strings.ReplaceAll(jsonValue.Get("status").Get("errorCode").String(), "\"", "")
-		if code != "" {
-			return code
-		}
-	}
-	// check respStatus.errorCode
-	if jsonValue.Exists("respStatus") && jsonValue.Get("respStatus").Exists("errorCode") {
-		code := strings.ReplaceAll(jsonValue.Get("respStatus").Get("errorCode").String(), "\"", "")
-		if code != "" {
-			return code
+	for _, key := range keys {
+		if jsonValue.Exists(key) {
+			if text := sanitizeResponseText(jsonValue.Get(key), maxBytes); text != "" {
+				return text
+			}
 		}
 	}
 	return ""
 }
 
+// getResponseErrorCode extracts the error code from a submit job response JSON
+func getResponseErrorCode(jsonValue *fastjson.Value) string {
+	if jsonValue == nil {
+		return ""
+	}
+	for _, container := range []string{"status", "respStatus"} {
+		if jsonValue.Exists(container) {
+			if code := getResponseString(jsonValue.Get(container), maxResponseErrorCodeBytes, "errorCode"); code != "" {
+				return code
+			}
+		}
+	}
+	return ""
+}
+
+func getResponseErrorMessage(jsonValue *fastjson.Value) string {
+	if jsonValue == nil {
+		return ""
+	}
+	for _, container := range []string{"status", "respStatus"} {
+		if jsonValue.Exists(container) {
+			if message := getResponseString(jsonValue.Get(container), maxResponseErrorMessageBytes, "message", "errorMessage"); message != "" {
+				return message
+			}
+		}
+	}
+	return ""
+}
+
+func formatLoginFailure(responseJSON *fastjson.Value) string {
+	if responseJSON == nil {
+		return "empty login response"
+	}
+	parts := make([]string, 0, 2)
+	if code := getResponseErrorCode(responseJSON); code != "" {
+		parts = append(parts, "error_code: "+code)
+	}
+	message := getResponseString(responseJSON, maxResponseErrorMessageBytes, "message", "errorMessage", "msg")
+	if message == "" {
+		message = getResponseErrorMessage(responseJSON)
+	}
+	if message != "" {
+		parts = append(parts, "message: "+message)
+	}
+	if len(parts) == 0 {
+		return "response contained no data token"
+	}
+	return strings.Join(parts, ", ")
+}
+
+func formatJobFailure(jobID string, responseJSON *fastjson.Value) string {
+	message := fmt.Sprintf("job failed, jobid: %s", jobID)
+	if errorCode := getResponseErrorCode(responseJSON); errorCode != "" {
+		message += ", error_code: " + errorCode
+	}
+	if errorMessage := getResponseErrorMessage(responseJSON); errorMessage != "" {
+		message += ", error_message: " + errorMessage
+	}
+	return message
+}
+
 func (conn *ClickzettaConn) execInternal(ctx context.Context, query string, bindings []driver.NamedValue) (*execResponse, error) {
 	flags := GetDriverFlags(ctx)
 
-	// resolve workspace from context flags, fallback to config
 	workspace := conn.cfg.Workspace
-	if v, ok := flags["workspace"]; ok && v != "" {
-		workspace = v
+	if value, ok := flags["workspace"]; ok && value != "" {
+		workspace = value
 	}
-
-	// construct jobId inside execInternal so context-level workspace takes effect
 	id := jobId{
 		ID:         formatJobId(),
 		Workspace:  workspace,
 		InstanceId: 0,
 	}
 
-	logger.WithContext(ctx).Infof("execInternal: %v with jobid: %v", query, id.ID)
+	logger.WithContext(ctx).Debugf("execInternal: query_length=%d with jobid: %v", len(query), id.ID)
+	trace := conn.newTimingTrace(ctx, nil)
+	execInternalStart := trace.start()
+	if trace.enabled {
+		defer trace.record(id.ID, "exec_internal_total", execInternalStart)
+	}
 	finalResponse := &execResponse{}
 	finalResponse.Data.JobId = id.ID
 	finalResponse.Data.QuerySQL = query
@@ -202,7 +395,7 @@ func (conn *ClickzettaConn) execInternal(ctx context.Context, query string, bind
 	for _, hint := range multiQueries[:len(multiQueries)-1] {
 		hintKV := strings.Split(hint, "=")
 		if len(hintKV) != 2 {
-			logger.WithContext(conn.ctx).Errorf("invalid hint: %v", hint)
+			logger.WithContext(ctx).Errorf("invalid query hint format, hint_length=%d", len(hint))
 			return nil, driver.ErrSkip
 		}
 		if hintKV[0] == "sdk.job.timeout" {
@@ -213,7 +406,7 @@ func (conn *ClickzettaConn) execInternal(ctx context.Context, query string, bind
 	}
 	for k, v := range flags {
 		switch k {
-		case "workspace", "virtualCluster", "schema", "catalog":
+		case "workspace", "virtualCluster", "schema", "catalog", traceTimingFlag:
 			// these are handled separately as structured request parameters
 			continue
 		default:
@@ -221,25 +414,25 @@ func (conn *ClickzettaConn) execInternal(ctx context.Context, query string, bind
 		}
 	}
 
-	isSeprate := false
+	isSeparate := false
 	if conn.cfg.Params != nil {
-		if _, ok := conn.cfg.Params["separate_params"]; ok {
-			isSeprate = *conn.cfg.Params["separate_params"] == "true"
+		if value, ok := conn.cfg.Params["separate_params"]; ok && value != nil {
+			isSeparate = parseConfigBool(*value)
 		}
 	}
 
 	// use bindings to fill the ? placeholders in query
-	if len(bindings) > 0 && (!isSeprate || !strings.HasPrefix(query, "INSERT")) {
+	if len(bindings) > 0 && (!isSeparate || !strings.HasPrefix(query, "INSERT")) {
 		query, _ = replacePlaceholders(query, bindings)
 	}
 
 	// convert bindings to Arrow IPC binary data
 	arrowBinary := [][]byte{}
 	err := error(nil)
-	if len(bindings) > 0 && isSeprate && strings.HasPrefix(query, "INSERT") {
+	if len(bindings) > 0 && isSeparate && strings.HasPrefix(query, "INSERT") {
 		arrowBinary, err = convertBindingsToArrowBinary(bindings)
 		if err != nil {
-			logger.WithContext(conn.ctx).Errorf("failed to convert bindings to arrow format: %v", err)
+			logger.WithContext(ctx).Errorf("failed to convert bindings to arrow format: %v", err)
 			return nil, fmt.Errorf("failed to convert bindings to arrow format: %w", err)
 		}
 	}
@@ -298,10 +491,14 @@ func (conn *ClickzettaConn) execInternal(ctx context.Context, query string, bind
 		JobDesc: &jd,
 	}
 
+	marshalStart := trace.start()
 	jsonData, err := json.Marshal(request.properties())
 	if err != nil {
 		logger.Errorf("parse submit job request to json error: %v", err)
 		return nil, err
+	}
+	if trace.enabled {
+		trace.record(id.ID, "build_submit_request", marshalStart, "request_bytes", len(jsonData))
 	}
 
 	headers := make(map[string]string)
@@ -317,8 +514,12 @@ func (conn *ClickzettaConn) execInternal(ctx context.Context, query string, bind
 	var lastErr error
 
 	for tried := 1; tried <= maxRetries; tried++ {
+		submitStart := trace.start()
 		responseJson, stream, err = GetHttpResponseMsgToJson(headers, string(SubmitJobRequestPath), conn, jsonData)
 		if err != nil {
+			if trace.enabled {
+				trace.record(id.ID, "submit_job_error", submitStart, "attempt", tried, "error_type", safeErrorType(err))
+			}
 			lastErr = err
 			logger.WithContext(ctx).Errorf("submitJob exception, jobid: %v, tried %d/%d, error: %v", id.ID, tried, maxRetries, err)
 			sleepIntervalMs = sleepWithBackoff(ctx, sleepIntervalMs)
@@ -326,6 +527,13 @@ func (conn *ClickzettaConn) execInternal(ctx context.Context, query string, bind
 		}
 
 		errorCode := getResponseErrorCode(responseJson)
+		status := ""
+		if responseJson.Exists("status") && responseJson.Get("status").Exists("state") {
+			status = strings.ReplaceAll(responseJson.Get("status").Get("state").String(), "\"", "")
+		}
+		if trace.enabled {
+			trace.record(id.ID, "submit_job", submitStart, "attempt", tried, "status", status, "error_code", errorCode, "response_bytes", len(stream))
+		}
 
 		// CZLH-57015: need to regenerate jobId and re-execute (not just retry submit)
 		if errorCode == errorCodeNeedReExecute {
@@ -362,15 +570,14 @@ func (conn *ClickzettaConn) execInternal(ctx context.Context, query string, bind
 			return finalResponse, nil
 		}
 
-		// check if job finished immediately in submit response
-		status := ""
-		if responseJson.Exists("status") && responseJson.Get("status").Exists("state") {
-			status = strings.ReplaceAll(responseJson.Get("status").Get("state").String(), "\"", "")
-		}
-
 		if status == "SUCCEED" || status == "FAILED" || status == "CANCELLED" {
 			// job finished immediately
-			return conn.handleFinishedJob(status, id, finalResponse, stream, responseJson)
+			handleStart := trace.start()
+			response, handleErr := conn.handleFinishedJob(status, id, finalResponse, stream, responseJson)
+			if trace.enabled {
+				trace.record(id.ID, "handle_finished_job", handleStart, "status", status)
+			}
+			return response, handleErr
 		}
 
 		if status == "QUEUEING" || status == "RUNNING" || status == "SETUP" {
@@ -444,7 +651,7 @@ func (conn *ClickzettaConn) handleFinishedJob(status string, id jobId, finalResp
 		return finalResponse, nil
 	case "FAILED":
 		finalResponse.Success = false
-		finalResponse.Message = "job failed, jobid: " + id.ID + ", error: " + responseJson.String()
+		finalResponse.Message = formatJobFailure(id.ID, responseJson)
 		return finalResponse, errors.New(finalResponse.Message)
 	case "CANCELLED":
 		finalResponse.Success = false
@@ -469,6 +676,14 @@ func isGetJobResultFailed(responseJson *fastjson.Value) bool {
 
 // retryGetResult polls for job result with retry and exponential backoff (aligned with Java retryGetResult)
 func (conn *ClickzettaConn) retryGetResult(ctx context.Context, id jobId, headers map[string]string, timeout int, finalResponse *execResponse, maxRetries int) (*execResponse, error) {
+	trace := conn.newTimingTrace(ctx, nil)
+	retryStart := trace.start()
+	pollCount := 0
+	if trace.enabled {
+		defer func() {
+			trace.record(id.ID, "retry_get_result_total", retryStart, "polls", pollCount)
+		}()
+	}
 	account := clickzettaAccoount{UserId: 0}
 	getJobReq := getJobResultRequest{
 		Account:   &account,
@@ -494,7 +709,6 @@ func (conn *ClickzettaConn) retryGetResult(ctx context.Context, id jobId, header
 	}
 
 	startTime := time.Now()
-	pollCount := 0           // counts polling attempts (for logging)
 	exceptionRetryCount := 0 // counts network/parsing errors
 	pollIntervalMs := 50
 	exceptionSleepMs := 50
@@ -510,8 +724,12 @@ func (conn *ClickzettaConn) retryGetResult(ctx context.Context, id jobId, header
 
 		pollCount++
 
+		postStart := trace.start()
 		res, err := conn.internal.Post(ctx, getJobURL, headers, jsonData, 0)
 		if err != nil {
+			if trace.enabled {
+				trace.record(id.ID, "get_job_post_error", postStart, "poll", pollCount, "error_type", safeErrorType(err))
+			}
 			exceptionRetryCount++
 			logger.WithContext(ctx).Errorf("get job result error, jobid: %v, exception retry %d/%d: %v", id.ID, exceptionRetryCount, maxRetries, err)
 			if exceptionRetryCount > maxRetries {
@@ -523,9 +741,18 @@ func (conn *ClickzettaConn) retryGetResult(ctx context.Context, id jobId, header
 			continue
 		}
 
+		postElapsed := time.Duration(0)
+		if trace.enabled {
+			postElapsed = time.Since(postStart)
+		}
+
+		readStart := trace.start()
 		stream, err := io.ReadAll(res.Body)
 		res.Body.Close()
 		if err != nil {
+			if trace.enabled {
+				trace.record(id.ID, "get_job_read_error", readStart, "poll", pollCount, "error_type", safeErrorType(err))
+			}
 			exceptionRetryCount++
 			logger.WithContext(ctx).Errorf("read get job response error, jobid: %v, exception retry %d/%d: %v", id.ID, exceptionRetryCount, maxRetries, err)
 			if exceptionRetryCount > maxRetries {
@@ -537,8 +764,17 @@ func (conn *ClickzettaConn) retryGetResult(ctx context.Context, id jobId, header
 			continue
 		}
 
+		readElapsed := time.Duration(0)
+		if trace.enabled {
+			readElapsed = time.Since(readStart)
+		}
+
+		parseStart := trace.start()
 		responseJson, err := fastjson.ParseBytes(stream)
 		if err != nil {
+			if trace.enabled {
+				trace.record(id.ID, "get_job_parse_error", parseStart, "poll", pollCount, "response_bytes", len(stream), "error_type", safeErrorType(err))
+			}
 			exceptionRetryCount++
 			logger.WithContext(ctx).Errorf("parse get job response error, jobid: %v, exception retry %d/%d: %v", id.ID, exceptionRetryCount, maxRetries, err)
 			if exceptionRetryCount > maxRetries {
@@ -548,6 +784,11 @@ func (conn *ClickzettaConn) retryGetResult(ctx context.Context, id jobId, header
 			}
 			exceptionSleepMs = sleepWithBackoff(ctx, exceptionSleepMs)
 			continue
+		}
+
+		parseElapsed := time.Duration(0)
+		if trace.enabled {
+			parseElapsed = time.Since(parseStart)
 		}
 
 		// check for JOB_NOT_EXIST error - throw immediately, don't retry
@@ -565,9 +806,9 @@ func (conn *ClickzettaConn) retryGetResult(ctx context.Context, id jobId, header
 		}
 
 		if !responseJson.Exists("status") {
-			logger.WithContext(ctx).Errorf("get job error, no status field: %v", string(stream))
+			logger.WithContext(ctx).Errorf("get job error, no status field, jobid: %v, response_bytes: %d", id.ID, len(stream))
 			finalResponse.Success = false
-			finalResponse.Message = "get job error: " + string(stream)
+			finalResponse.Message = "get job error: missing status field"
 			return finalResponse, driver.ErrBadConn
 		}
 
@@ -577,17 +818,24 @@ func (conn *ClickzettaConn) retryGetResult(ctx context.Context, id jobId, header
 			if status == "SUCCEED" {
 				finalResponse.Success = true
 				finalResponse.Message = "job succeed, jobid: " + id.ID
+				unmarshalStart := trace.start()
 				if err := json.Unmarshal(stream, &finalResponse.Data.HTTPResponseMessage); err != nil {
+					if trace.enabled {
+						trace.record(id.ID, "get_job_unmarshal_error", unmarshalStart, "poll", pollCount, "response_bytes", len(stream), "error_type", safeErrorType(err))
+					}
 					finalResponse.Success = false
 					finalResponse.Message = err.Error()
 					return finalResponse, err
+				}
+				if trace.enabled {
+					trace.record(id.ID, "get_job_poll", postStart, "poll", pollCount, "status", status, "error_code", errorCode, "post_us", postElapsed.Microseconds(), "read_us", readElapsed.Microseconds(), "parse_us", parseElapsed.Microseconds(), "unmarshal_us", time.Since(unmarshalStart).Microseconds(), "response_bytes", len(stream))
 				}
 				return finalResponse, nil
 			}
 
 			if status == "FAILED" {
 				finalResponse.Success = false
-				finalResponse.Message = "job failed, jobid: " + id.ID + ", error: " + responseJson.String()
+				finalResponse.Message = formatJobFailure(id.ID, responseJson)
 				return finalResponse, errors.New(finalResponse.Message)
 			}
 
@@ -601,6 +849,9 @@ func (conn *ClickzettaConn) retryGetResult(ctx context.Context, id jobId, header
 			exceptionRetryCount = 0
 			elapsed := time.Since(startTime)
 			logger.WithContext(ctx).Infof("job %v is running, status: %v, poll attempt %d, elapsed: %v", id.ID, status, pollCount, elapsed)
+			if trace.enabled {
+				trace.record(id.ID, "get_job_poll", postStart, "poll", pollCount, "status", status, "error_code", errorCode, "post_us", postElapsed.Microseconds(), "read_us", readElapsed.Microseconds(), "parse_us", parseElapsed.Microseconds(), "response_bytes", len(stream))
+			}
 		}
 
 		// sleep before next poll
@@ -745,7 +996,7 @@ func (conn *ClickzettaConn) PrepareContext(
 	ctx context.Context,
 	query string) (
 	driver.Stmt, error) {
-	logger.WithContext(ctx).Infof("PrepareContext: %#v", query)
+	logger.WithContext(ctx).Debugf("PrepareContext: query_length=%d", len(query))
 	if conn.internal == nil {
 		return nil, driver.ErrBadConn
 	}
@@ -765,15 +1016,15 @@ func (conn *ClickzettaConn) ExecContext(
 	query string,
 	args []driver.NamedValue) (
 	driver.Result, error) {
-	logger.WithContext(ctx).Infof("ExecContext: %#v, %v", query, args)
+	logger.WithContext(ctx).Debugf("ExecContext: query_length=%d, args_count=%d", len(query), len(args))
 	if conn.internal == nil {
 		return nil, driver.ErrBadConn
 	}
 	data, err := conn.exec(ctx, query, true, false, false, args)
 	if err != nil {
-		logger.WithContext(ctx).Errorf("exec sql: %v error: %v", query, err)
+		logger.WithContext(ctx).Errorf("exec sql failed, query_length=%d, args_count=%d, error=%v", len(query), len(args), err)
 		result := &clickzettaResult{
-			queryID: data.Data.JobId,
+			queryID: dataJobID(data),
 			status:  queryStatus(QueryFailed),
 			err:     err,
 		}
@@ -798,13 +1049,26 @@ func (conn *ClickzettaConn) QueryContext(
 	query string,
 	args []driver.NamedValue) (
 	driver.Rows, error) {
-	logger.WithContext(ctx).Infof("QueryContext: %#v, %v", query, args)
+	diagnostics := conn.newQueryDiagnostics(ctx)
+	diagnostics.log.Debugf("QueryContext: query_length=%d, args_count=%d", len(query), len(args))
 	if conn.internal == nil {
 		return nil, driver.ErrBadConn
 	}
+	queryStart := diagnostics.trace.start()
+	queryJobID := ""
+	if diagnostics.trace.enabled {
+		defer func() {
+			diagnostics.trace.record(queryJobID, "query_context_total", queryStart)
+		}()
+	}
+	execStart := diagnostics.trace.start()
 	data, err := conn.exec(ctx, query, false, false, false, args)
+	queryJobID = dataJobID(data)
+	if diagnostics.trace.enabled {
+		diagnostics.trace.record(queryJobID, "query_exec", execStart)
+	}
 	if err != nil {
-		logger.WithContext(ctx).Errorf("exec sql error: %v", err)
+		diagnostics.log.Errorf("exec sql error: %v", err)
 		return nil, err
 	}
 	status := queryStatus("")
@@ -818,19 +1082,31 @@ func (conn *ClickzettaConn) QueryContext(
 		}
 	}
 	rows := &clickzettaRows{
-		queryID:  data.Data.JobId,
-		status:   status,
-		err:      nil,
-		cn:       conn,
-		response: data,
+		queryID:     data.Data.JobId,
+		status:      status,
+		err:         nil,
+		cn:          conn,
+		response:    data,
+		diagnostics: diagnostics,
 	}
-	err = rows.response.Data.init()
+	initStart := diagnostics.trace.start()
+	err = rows.response.Data.init(diagnostics)
+	if diagnostics.trace.enabled {
+		diagnostics.trace.record(data.Data.JobId, "query_data_init", initStart, "data_type", rows.response.Data.DataType, "schema_columns", len(rows.response.Data.Schema))
+	}
 	if err != nil {
-		logger.WithContext(ctx).Errorf("init response data struct error: %v", err)
+		diagnostics.log.Errorf("init response data struct error: %v", err)
 		return nil, err
 	}
 
 	return rows, nil
+}
+
+func dataJobID(data *execResponse) string {
+	if data == nil {
+		return ""
+	}
+	return data.Data.JobId
 }
 
 func (conn *ClickzettaConn) queryContextInternal(
@@ -838,7 +1114,7 @@ func (conn *ClickzettaConn) queryContextInternal(
 	query string,
 	args []driver.NamedValue) (
 	driver.Rows, error) {
-	logger.WithContext(ctx).Infof("queryContextInternal: %#v, %v", query, args)
+	logger.WithContext(ctx).Debugf("queryContextInternal: query_length=%d, args_count=%d", len(query), len(args))
 	return nil, nil
 }
 
@@ -1302,12 +1578,11 @@ func buildClickzettaConn(ctx context.Context, config Config) (*ClickzettaConn, e
 		logger.WithContext(ctx).Errorf("parse login response to json error: %v", err)
 		return nil, err
 	}
-	if body.Exists("data") {
-		if body.Get("data").Exists("token") {
-			conn.cfg.Token = strings.ReplaceAll(body.Get("data").Get("token").String(), "\"", "")
-		}
+	if body.Exists("data") && body.Get("data").Exists("token") {
+		conn.cfg.Token = strings.ReplaceAll(body.Get("data").Get("token").String(), "\"", "")
 	} else {
-		logger.WithContext(ctx).Errorf("login error: %v", string(stream))
+		err = errors.New("login failed: " + formatLoginFailure(body))
+		logger.WithContext(ctx).Errorf("login error: %v, response_bytes: %d", err, len(stream))
 		return nil, err
 	}
 
