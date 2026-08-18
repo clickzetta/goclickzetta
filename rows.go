@@ -39,7 +39,7 @@ func (rows *clickzettaRows) Columns() []string {
 }
 
 func (rows *clickzettaRows) Next(dest []driver.Value) error {
-	logger.Infoln("Rows.Next")
+	logger.Debugln("Rows.Next")
 	if rows.HasNextResultSet() {
 		err := rows.NextResultSet()
 		if err != nil {

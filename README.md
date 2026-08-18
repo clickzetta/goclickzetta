@@ -114,6 +114,20 @@ ${username}:${pwd}@${protocol}(${service}/${schema}?virtualCluster=${vc}&workspa
 * **workspace**: The Clickzetta workspace name.
 * **instanceName**: The Clickzetta instance name.
 
+Optional query parameters:
+
+* **magic_token**: Uses an existing JWT token and skips username/password login.
+* **sdk.query.max.retries**: Sets the maximum number of submit and polling retries. The default is `10`.
+* **trace_timing**: Enables phase-level query timing logs. Timing records are emitted at debug level and do not include SQL text or response payloads.
+
+Timing diagnostics can also be enabled for the whole process before startup:
+
+```sh
+CLICKZETTA_TRACE_TIMING=1 ./your-application
+```
+
+The SDK logger must be configured at debug level for timing records to be emitted.
+
 When User use the Clickzetta driver to execute SQL and write batch data , must construct the DSN.
 
 ## BulkLoad
@@ -142,4 +156,3 @@ Users can use Row to write data to Clickzetta. Row has the following methods:
 
 For official support, contact Clickzetta support at:
 [https://www.yunqi.tech](https://www.yunqi.tech).
-
