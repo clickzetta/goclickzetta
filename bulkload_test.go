@@ -23,7 +23,7 @@ func TestBulkLoad(t *testing.T) {
 }
 
 func CheckBulkLoadResult(t *testing.T) {
-	db, err := sql.Open("clickzetta", "username:passwprd@https(mock.clickzetta.com)/schema?virtualCluster=default&workspace=mock&instance=mock")
+	db, err := sql.Open("clickzetta", integrationDSN(t))
 	if err != nil {
 		t.Error(err)
 	}
@@ -48,7 +48,7 @@ func CheckBulkLoadResult(t *testing.T) {
 }
 
 func CheckBulkLoadShow(t *testing.T) {
-	db, err := sql.Open("clickzetta", "username:passwprd@https(mock.clickzetta.com)/schema?virtualCluster=default&workspace=mock&instance=mock")
+	db, err := sql.Open("clickzetta", integrationDSN(t))
 	if err != nil {
 		t.Error(err)
 	}
@@ -74,7 +74,7 @@ func CheckBulkLoadShow(t *testing.T) {
 
 func TestBulkLoadMinorData(t *testing.T) {
 	t.Log("TestBulkloadMinorData")
-	dsn := "username:passwprd@https(mock.clickzetta.com)/schema?virtualCluster=default&workspace=mock&instance=mock"
+	dsn := integrationDSN(t)
 	conn, err := connect(dsn)
 	if err != nil {
 		t.Error(err)
@@ -125,7 +125,7 @@ func TestBulkLoadMinorData(t *testing.T) {
 
 func TestBulkLoadMajorData(t *testing.T) {
 	t.Log("TestBulkloadMinorData")
-	dsn := "username:passwprd@https(mock.clickzetta.com)/schema?virtualCluster=default&workspace=mock&instance=mock"
+	dsn := integrationDSN(t)
 	conn, err := connect(dsn)
 	if err != nil {
 		t.Error(err)
@@ -183,7 +183,7 @@ func TestBulkLoadMajorData(t *testing.T) {
 
 func TestBulkLoadDistributedWriter(t *testing.T) {
 	t.Log("TestBulkloadMinorData")
-	dsn := "username:passwprd@https(mock.clickzetta.com)/schema?virtualCluster=default&workspace=mock&instance=mock"
+	dsn := integrationDSN(t)
 	conn, err := connect(dsn)
 	if err != nil {
 		t.Error(err)
@@ -248,7 +248,7 @@ func TestBulkLoadDistributedWriter(t *testing.T) {
 
 func TestBulkLoadOverwrite(t *testing.T) {
 	t.Log("TestBulkloadMinorData")
-	dsn := "username:passwprd@https(mock.clickzetta.com)/schema?virtualCluster=default&workspace=mock&instance=mock"
+	dsn := integrationDSN(t)
 	conn, err := connect(dsn)
 	if err != nil {
 		t.Error(err)
@@ -299,7 +299,7 @@ func TestBulkLoadOverwrite(t *testing.T) {
 
 func TestBulkLoadUpsert(t *testing.T) {
 	t.Log("TestBulkloadMinorData")
-	dsn := "username:passwprd@https(mock.clickzetta.com)/schema?virtualCluster=default&workspace=mock&instance=mock"
+	dsn := integrationDSN(t)
 	conn, err := connect(dsn)
 	if err != nil {
 		t.Error(err)
@@ -350,7 +350,7 @@ func TestBulkLoadUpsert(t *testing.T) {
 }
 func TestBulkLoadAppendPt(t *testing.T) {
 	t.Log("TestBulkloadMinorData")
-	dsn := "username:passwprd@https(mock.clickzetta.com)/schema?virtualCluster=default&workspace=mock&instance=mock"
+	dsn := integrationDSN(t)
 	conn, err := connect(dsn)
 	if err != nil {
 		t.Error(err)
@@ -402,7 +402,7 @@ func TestBulkLoadAppendPt(t *testing.T) {
 
 func TestBulkLoadOverwritePt(t *testing.T) {
 	t.Log("TestBulkloadMinorData")
-	dsn := "username:passwprd@https(mock.clickzetta.com)/schema?virtualCluster=default&workspace=mock&instance=mock"
+	dsn := integrationDSN(t)
 	conn, err := connect(dsn)
 	if err != nil {
 		t.Error(err)
@@ -454,7 +454,7 @@ func TestBulkLoadOverwritePt(t *testing.T) {
 
 func TestBulkLoadUpsertPt(t *testing.T) {
 	t.Log("TestBulkloadMinorData")
-	dsn := "username:passwprd@https(mock.clickzetta.com)/schema?virtualCluster=default&workspace=mock&instance=mock"
+	dsn := integrationDSN(t)
 	conn, err := connect(dsn)
 	if err != nil {
 		t.Error(err)

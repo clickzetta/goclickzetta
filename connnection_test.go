@@ -6,143 +6,107 @@ import (
 	"fmt"
 	"io"
 	"testing"
+	"time"
 
 	"github.com/zeebo/assert"
 )
 
 func TestBuildConnection(t *testing.T) {
 	ctx := context.TODO()
-	cfg := Config{
-		UserName:       "username",
-		Password:       "password!",
-		Protocol:       "https",
-		Service:        "https://mock.clickzetta.com",
-		Instance:       "mock",
-		Workspace:      "mock",
-		VirtualCluster: "default",
-		Schema:         "default",
-	}
+	cfg := integrationConfig(t)
 	conn, err := buildClickzettaConn(ctx, cfg)
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = conn.Close() })
 	if conn.cfg.Token == "" {
-		t.Error("token is empty")
+		t.Fatal("token is empty")
 	}
 	fmt.Println(conn.cfg.Token)
-	err = conn.Close()
-	if err != nil {
-		t.Error(err)
-	}
 }
 
 func TestConnectionQuery(t *testing.T) {
 	ctx := context.TODO()
-	cfg := Config{
-		UserName:       "username",
-		Password:       "password!",
-		Protocol:       "https",
-		Service:        "https://mock.clickzetta.com",
-		Instance:       "mock",
-		Workspace:      "mock",
-		VirtualCluster: "default",
-		Schema:         "default",
-	}
+	cfg := integrationConfig(t)
 	conn, err := buildClickzettaConn(ctx, cfg)
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
-	if conn.cfg.Token == "" {
-		t.Error("token is empty")
-	}
-	data, err := conn.Query("select * from clickzetta_sample_data.ecommerce_events_history.ecommerce_events_multicategorystore_live limit 10;", nil)
+	t.Cleanup(func() { _ = conn.Close() })
+	data, err := conn.Query("select 1+1;", nil)
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
-	result := make([]driver.Value, 9)
-	for data.Next(result) != io.EOF {
+	defer data.Close()
+	result := make([]driver.Value, 1)
+	for {
+		err = data.Next(result)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
 		fmt.Println(result)
-	}
-	err = conn.Close()
-	if err != nil {
-		t.Error(err)
 	}
 }
 
 func TestConnectionExec(t *testing.T) {
 	ctx := context.TODO()
-	cfg := Config{
-		UserName:       "username",
-		Password:       "password!",
-		Protocol:       "https",
-		Service:        "https://mock.clickzetta.com",
-		Instance:       "mock",
-		Workspace:      "mock",
-		VirtualCluster: "default",
-		Schema:         "default",
-	}
+	cfg := integrationConfig(t)
 	conn, err := buildClickzettaConn(ctx, cfg)
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = conn.Close() })
 	if conn.cfg.Token == "" {
 		t.Error("token is empty")
 	}
-	ddl := "CREATE TABLE `customers_go_test` (\n  `id` int(11) NULL,\n  `first_name` varchar(50) NULL,\n  `last_name` varchar(50) NULL,\n  `email` varchar(100) NULL,\n  `phone_number` varchar(20) NULL,\n  `address` varchar(200) NULL\n)"
+	tableName := fmt.Sprintf("goclickzetta_conn_it_%d", time.Now().UnixNano())
+	ddl := fmt.Sprintf("CREATE TABLE %s (id BIGINT, first_name STRING, last_name STRING, email STRING, phone STRING, address STRING)", tableName)
+	t.Cleanup(func() {
+		if _, cleanupErr := conn.Exec(fmt.Sprintf("DROP TABLE IF EXISTS %s", tableName), nil); cleanupErr != nil {
+			t.Errorf("drop connection integration table: %v", cleanupErr)
+		}
+	})
 	result, err := conn.Exec(ddl, nil)
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 	res, ok := result.(ClickzettaResult)
 	if !ok {
-		t.Error("result is not ClickzettaResult")
+		t.Fatal("result is not ClickzettaResult")
 	}
 	if res.GetStatus() != queryStatus(QueryStatusComplete) {
 		fmt.Println(res.GetError().Error())
-		t.Error("query status is failed")
+		t.Fatal("query status is failed")
 	}
 	assert.Equal(t, res.GetStatus(), queryStatus(QueryStatusComplete))
-	del := "DROP TABLE `customers_go_test`"
+	del := fmt.Sprintf("DROP TABLE IF EXISTS %s", tableName)
 	result, err = conn.Exec(del, nil)
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 	res, ok = result.(ClickzettaResult)
 	if !ok {
-		t.Error("result is not ClickzettaResult")
+		t.Fatal("result is not ClickzettaResult")
 	}
 	if res.GetStatus() != queryStatus(QueryStatusComplete) {
 		fmt.Println(res.GetError().Error())
-		t.Error("query status is failed")
-	}
-	err = conn.Close()
-	if err != nil {
-		t.Error(err)
+		t.Fatal("query status is failed")
 	}
 }
 
 func TestConnectionPing(t *testing.T) {
 	ctx := context.TODO()
-	cfg := Config{
-		UserName:       "username",
-		Password:       "password!",
-		Protocol:       "https",
-		Service:        "https://mock.clickzetta.com",
-		Instance:       "mock",
-		Workspace:      "mock",
-		VirtualCluster: "default",
-		Schema:         "default",
-	}
+	cfg := integrationConfig(t)
 	conn, err := buildClickzettaConn(ctx, cfg)
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = conn.Close() })
 	err = conn.Ping(ctx)
 	if err != nil {
-		t.Error(err)
-	}
-	err = conn.Close()
-	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 }

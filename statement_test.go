@@ -1,31 +1,61 @@
 package goclickzetta
 
 import (
+	"context"
 	"database/sql/driver"
 	"fmt"
 	"io"
 	"testing"
+	"time"
 
 	"github.com/zeebo/assert"
 )
 
-func initConn() *ClickzettaConn {
-	dsn := "username:passwprd@https(mock.clickzetta.com)/schema?virtualCluster=default&workspace=mock&instance=mock"
+func initConn(t *testing.T) *ClickzettaConn {
+	t.Helper()
+	dsn := integrationDSN(t)
 	driver := ClickzettaDriver{}
 	conn, err := driver.Open(dsn)
 	if err != nil {
-		return nil
+		t.Fatalf("open integration connection: %v", err)
 	}
 	if conn == nil {
-		return nil
+		t.Fatal("integration connection is nil")
 	}
-	return conn.(*ClickzettaConn)
+	clickzettaConn, ok := conn.(*ClickzettaConn)
+	if !ok {
+		t.Fatalf("unexpected integration connection type %T", conn)
+	}
+	t.Cleanup(func() {
+		if err := clickzettaConn.Close(); err != nil {
+			t.Errorf("close integration connection: %v", err)
+		}
+	})
+	return clickzettaConn
 }
 
-func closeConn(conn *ClickzettaConn) {
-	err := conn.Close()
-	if err != nil {
-		return
+func createStmtIntegrationTable(t *testing.T, connection *ClickzettaConn) string {
+	t.Helper()
+	tableName := fmt.Sprintf("goclickzetta_stmt_it_%d", time.Now().UnixNano())
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	if _, err := connection.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id BIGINT, name STRING)", tableName), nil); err != nil {
+		t.Fatalf("create statement integration table: %v", err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cleanupCancel()
+		if _, err := connection.ExecContext(cleanupCtx, fmt.Sprintf("DROP TABLE IF EXISTS %s", tableName), nil); err != nil {
+			t.Errorf("drop statement integration table: %v", err)
+		}
+	})
+	return tableName
+}
+
+func seedStmtIntegrationTable(t *testing.T, connection *ClickzettaConn, tableName string) {
+	t.Helper()
+	if _, err := connection.Exec(fmt.Sprintf("INSERT INTO %s VALUES (1, 'alice'), (2, 'bob')", tableName), nil); err != nil {
+		t.Fatalf("seed statement integration table: %v", err)
 	}
 }
 
@@ -37,15 +67,8 @@ func TestStmt(t *testing.T) {
 	t.Run("TestStmtQuery", TestStmtQuery)
 }
 func TestStmtClose(t *testing.T) {
-	connection := initConn()
-	defer closeConn(connection)
-	if connection == nil {
-		t.Error("connection is nil")
-	}
-	stmt := ClickzettaStmt{
-		conn:  connection,
-		query: "select * from clickzetta_sample_data.ecommerce_events_history.ecommerce_events_multicategorystore_live limit 10;",
-	}
+	connection := initConn(t)
+	stmt := ClickzettaStmt{conn: connection, query: "SELECT 1"}
 	err := stmt.Close()
 	if err != nil {
 		t.Error(err)
@@ -53,87 +76,83 @@ func TestStmtClose(t *testing.T) {
 }
 
 func TestStmtExecContext(t *testing.T) {
-	connection := initConn()
-	defer closeConn(connection)
-	if connection == nil {
-		t.Error("connection is nil")
-	}
-	stmt := ClickzettaStmt{
-		conn:  connection,
-		query: "select * from clickzetta_sample_data.ecommerce_events_history.ecommerce_events_multicategorystore_live limit 10;",
-	}
+	connection := initConn(t)
+	tableName := createStmtIntegrationTable(t, connection)
+	stmt := ClickzettaStmt{conn: connection, query: fmt.Sprintf("INSERT INTO %s VALUES (1, 'alice')", tableName)}
 	result, err := stmt.ExecContext(connection.ctx, nil)
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 	res, ok := result.(ClickzettaResult)
 	if !ok {
-		t.Error("result is not ClickzettaResult")
+		t.Fatal("result is not ClickzettaResult")
 	}
 	assert.Equal(t, res.GetStatus(), queryStatus(QueryStatusComplete))
 
 }
 
 func TestStmtQueryContext(t *testing.T) {
-	connection := initConn()
-	defer closeConn(connection)
-	if connection == nil {
-		t.Error("connection is nil")
-	}
-	stmt := ClickzettaStmt{
-		conn:  connection,
-		query: "select * from clickzetta_sample_data.ecommerce_events_history.ecommerce_events_multicategorystore_live limit 10;",
-	}
+	connection := initConn(t)
+	tableName := createStmtIntegrationTable(t, connection)
+	seedStmtIntegrationTable(t, connection, tableName)
+	stmt := ClickzettaStmt{conn: connection, query: fmt.Sprintf("SELECT id, name FROM %s ORDER BY id", tableName)}
 	data, err := stmt.QueryContext(connection.ctx, nil)
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 	result := make([]driver.Value, 10)
-	for data.Next(result) != io.EOF {
-		fmt.Println("fetch rows")
+	defer data.Close()
+	rowCount := 0
+	for {
+		err = data.Next(result)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		rowCount++
 	}
-	assert.Equal(t, len(result), 10)
+	assert.Equal(t, rowCount, 2)
 }
 
 func TestStmtExec(t *testing.T) {
-	connection := initConn()
-	defer closeConn(connection)
-	if connection == nil {
-		t.Error("connection is nil")
-	}
-	stmt := ClickzettaStmt{
-		conn:  connection,
-		query: "select * from clickzetta_sample_data.ecommerce_events_history.ecommerce_events_multicategorystore_live limit 10;",
-	}
+	connection := initConn(t)
+	tableName := createStmtIntegrationTable(t, connection)
+	stmt := ClickzettaStmt{conn: connection, query: fmt.Sprintf("INSERT INTO %s VALUES (1, 'alice')", tableName)}
 	result, err := stmt.Exec(nil)
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 	res, ok := result.(ClickzettaResult)
 	if !ok {
-		t.Error("result is not ClickzettaResult")
+		t.Fatal("result is not ClickzettaResult")
 	}
 	assert.Equal(t, res.GetStatus(), queryStatus(QueryStatusComplete))
 
 }
 
 func TestStmtQuery(t *testing.T) {
-	connection := initConn()
-	defer closeConn(connection)
-	if connection == nil {
-		t.Error("connection is nil")
-	}
-	stmt := ClickzettaStmt{
-		conn:  connection,
-		query: "select * from clickzetta_sample_data.ecommerce_events_history.ecommerce_events_multicategorystore_live limit 10;",
-	}
+	connection := initConn(t)
+	tableName := createStmtIntegrationTable(t, connection)
+	seedStmtIntegrationTable(t, connection, tableName)
+	stmt := ClickzettaStmt{conn: connection, query: fmt.Sprintf("SELECT id, name FROM %s ORDER BY id", tableName)}
 	data, err := stmt.Query(nil)
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 	result := make([]driver.Value, 10)
-	for data.Next(result) != io.EOF {
-		fmt.Println("fetch rows")
+	defer data.Close()
+	rowCount := 0
+	for {
+		err = data.Next(result)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		rowCount++
 	}
-	assert.Equal(t, len(result), 10)
+	assert.Equal(t, rowCount, 2)
 }
