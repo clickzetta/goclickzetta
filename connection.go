@@ -40,6 +40,14 @@ const (
 	GETWAYPATH           requestPath = "/igs/gatewayEndpoint"
 )
 
+// cancelJob 请求中 user_agent 的默认取值，用于区分任务被取消的来源
+const (
+	// cancelUserAgentByTimeout 表示 SDK 因作业超时自动发起的取消
+	cancelUserAgentByTimeout = "gosdk_by_timeout"
+	// cancelUserAgentByUser 表示外部主动调用取消但未指定 user agent
+	cancelUserAgentByUser = "gosdk_by_user"
+)
+
 // HTTPTransport is the default transport configuration.
 // Deprecated: kept for backward compatibility. Each connection now creates its own transport.
 var HTTPTransport = newHTTPTransport()
@@ -73,6 +81,11 @@ type ClickzettaConn struct {
 	ctx      context.Context
 	cfg      *Config
 	internal InternalClient
+
+	// jobMu 保护 currentJobId 和 jobCancelled，Cancel 通常来自其它 goroutine
+	jobMu        sync.Mutex
+	currentJobId *jobId
+	jobCancelled bool
 }
 
 const traceTimingFlag = "trace_timing"
@@ -373,6 +386,8 @@ func (conn *ClickzettaConn) execInternal(ctx context.Context, query string, bind
 		Workspace:  workspace,
 		InstanceId: 0,
 	}
+	conn.setCurrentJob(id)
+	defer conn.clearCurrentJob()
 
 	logger.WithContext(ctx).Debugf("execInternal: query_length=%d with jobid: %v", len(query), id.ID)
 	trace := conn.newTimingTrace(ctx, nil)
@@ -516,7 +531,7 @@ func (conn *ClickzettaConn) execInternal(ctx context.Context, query string, bind
 	var stream []byte
 	var lastErr error
 
-	for tried := 1; tried <= maxRetries; tried++ {
+	for tried := 1; tried <= maxRetries && !conn.jobIsCancelled(); tried++ {
 		submitStart := trace.start()
 		responseJson, stream, err = GetHttpResponseMsgToJson(headers, string(SubmitJobRequestPath), conn, jsonData)
 		if err != nil {
@@ -601,6 +616,15 @@ func (conn *ClickzettaConn) execInternal(ctx context.Context, query string, bind
 		// unknown status or no status, retry
 		logger.WithContext(ctx).Errorf("unexpected submit response for jobid: %v, status: %v, tried %d/%d", id.ID, status, tried, maxRetries)
 		sleepIntervalMs = sleepWithBackoff(ctx, sleepIntervalMs)
+	}
+
+	// 作业已被取消，不再重试提交
+	if conn.jobIsCancelled() {
+		errMsg := fmt.Sprintf("job %s cancelled", id.ID)
+		logger.WithContext(ctx).Infof("stop submitting job %v: cancelled", id.ID)
+		finalResponse.Success = false
+		finalResponse.Message = errMsg
+		return finalResponse, errors.New(errMsg)
 	}
 
 	// all retries exhausted
@@ -892,7 +916,7 @@ func GetHttpResponseMsgToJson(headers map[string]string, path string, connection
 func (conn *ClickzettaConn) checkJobTimeout(timeout int, startTime time.Time, id jobId, headers map[string]string) bool {
 	if timeout > 0 {
 		if time.Now().Sub(startTime).Seconds() > float64(timeout) {
-			err := conn.cancelJob(id, headers)
+			err := conn.cancelJob(id, headers, cancelUserAgentByTimeout)
 			if err != nil {
 				logger.WithContext(conn.ctx).Errorf("cancel job error: %v", err)
 			}
@@ -902,14 +926,14 @@ func (conn *ClickzettaConn) checkJobTimeout(timeout int, startTime time.Time, id
 	return false
 }
 
-func (conn *ClickzettaConn) cancelJob(id jobId, headers map[string]string) error {
+func (conn *ClickzettaConn) cancelJob(id jobId, headers map[string]string, userAgent string) error {
 	account := clickzettaAccoount{
 		UserId: 0,
 	}
 	cancelJobRequest := cancelJobRequest{
 		Account:   &account,
 		JobId:     &id,
-		UserAgent: "",
+		UserAgent: userAgent,
 		Force:     false,
 	}
 	jsonValue, err := json.Marshal(cancelJobRequest.properties())
@@ -929,6 +953,86 @@ func (conn *ClickzettaConn) cancelJob(id jobId, headers map[string]string) error
 	}
 	defer res.Body.Close()
 	return nil
+}
+
+// authHeaders 构造访问 lakehouse 接口所需的公共请求头
+func (conn *ClickzettaConn) authHeaders() map[string]string {
+	headers := make(map[string]string)
+	headers["Content-Type"] = "application/json"
+	headers["instanceName"] = conn.cfg.Instance
+	headers["X-ClickZetta-Token"] = conn.cfg.Token
+	return headers
+}
+
+// resolveCancelUserAgent 在外部调用未指定 user agent 时回落到默认值
+func resolveCancelUserAgent(userAgent string) string {
+	if strings.TrimSpace(userAgent) == "" {
+		return cancelUserAgentByUser
+	}
+	return userAgent
+}
+
+func (conn *ClickzettaConn) setCurrentJob(id jobId) {
+	conn.jobMu.Lock()
+	defer conn.jobMu.Unlock()
+	conn.currentJobId = &id
+	conn.jobCancelled = false
+}
+
+// markJobCancelled 仅在被取消的正是本连接当前执行的 job 时置位，
+// 用于及时中止提交重试（对齐 Java CZStatement.cancel）
+func (conn *ClickzettaConn) markJobCancelled(jobID string) {
+	conn.jobMu.Lock()
+	defer conn.jobMu.Unlock()
+	if conn.currentJobId != nil && conn.currentJobId.ID == jobID {
+		conn.jobCancelled = true
+	}
+}
+
+// jobIsCancelled 返回本连接当前执行的 job 是否已被取消
+func (conn *ClickzettaConn) jobIsCancelled() bool {
+	conn.jobMu.Lock()
+	defer conn.jobMu.Unlock()
+	return conn.jobCancelled
+}
+
+func (conn *ClickzettaConn) clearCurrentJob() {
+	conn.jobMu.Lock()
+	defer conn.jobMu.Unlock()
+	conn.currentJobId = nil
+}
+
+// cancelJobAndMark 发出取消请求，仅在请求成功后才认为作业已取消
+func (conn *ClickzettaConn) cancelJobAndMark(id jobId, userAgent string) error {
+	if err := conn.cancelJob(id, conn.authHeaders(), resolveCancelUserAgent(userAgent)); err != nil {
+		return err
+	}
+	conn.markJobCancelled(id.ID)
+	return nil
+}
+
+// Cancel 取消该连接上正在执行的 job。userAgent 会作为 cancelJob 请求的
+// user_agent 字段上报，传空字符串时使用默认值 gosdk_by_user。
+// 连接上没有正在执行的 job 时返回错误。
+func (conn *ClickzettaConn) Cancel(userAgent string) error {
+	conn.jobMu.Lock()
+	id := conn.currentJobId
+	conn.jobMu.Unlock()
+	if id == nil {
+		return errors.New("no running job on this connection")
+	}
+	return conn.cancelJobAndMark(*id, userAgent)
+}
+
+// CancelJob 取消指定的 job。userAgent 会作为 cancelJob 请求的 user_agent 字段
+// 上报，传空字符串时使用默认值 gosdk_by_user。
+func (conn *ClickzettaConn) CancelJob(jobID string, userAgent string) error {
+	id := jobId{
+		ID:         jobID,
+		Workspace:  conn.cfg.Workspace,
+		InstanceId: 0,
+	}
+	return conn.cancelJobAndMark(id, userAgent)
 }
 
 func formatJobId() string {
