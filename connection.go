@@ -1421,9 +1421,13 @@ func (conn *ClickzettaConn) GateWayCall(message proto.Message, method ingestion.
 		logger.WithContext(conn.ctx).Errorf("gateway call error: %v", err)
 		return nil, err
 	}
+	// A gateway-level failure comes back without a status field: the table is
+	// missing, the caller lacks a grant, the operation is disabled for that
+	// table. err is nil at this point, so returning it would hand the caller
+	// (nil, nil) and every one of them dereferences the value straight away.
 	if !jsonResponse.Exists("status") {
 		logger.WithContext(conn.ctx).Errorf("gateway call error: %v", jsonResponse.String())
-		return nil, err
+		return nil, errors.New("gateway call error, no status field: " + jsonResponse.String())
 	}
 	gateWayStatus := ingestion.GateWayResponseStatus{}
 	reader := strings.NewReader(jsonResponse.Get("status").String())
@@ -1433,7 +1437,14 @@ func (conn *ClickzettaConn) GateWayCall(message proto.Message, method ingestion.
 		return nil, err
 	}
 	if gateWayStatus.Code == ingestion.Code_SUCCESS {
-		return jsonResponse.Get("message"), nil
+		// Same reasoning: a success envelope with no message field would
+		// otherwise return a nil value with a nil error.
+		message := jsonResponse.Get("message")
+		if message == nil {
+			logger.WithContext(conn.ctx).Errorf("gateway call error: %v", jsonResponse.String())
+			return nil, errors.New("gateway call succeeded but carried no message: " + jsonResponse.String())
+		}
+		return message, nil
 	} else {
 		logger.WithContext(conn.ctx).Errorf("gateway call error: %v", jsonResponse.String())
 		return nil, errors.New("gateway call error: " + jsonResponse.String())

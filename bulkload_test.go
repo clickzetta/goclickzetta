@@ -25,7 +25,7 @@ func TestBulkLoad(t *testing.T) {
 func CheckBulkLoadResult(t *testing.T) {
 	db, err := sql.Open("clickzetta", integrationDSN(t))
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 	if db == nil {
 		t.Error("db is nil")
@@ -33,14 +33,14 @@ func CheckBulkLoadResult(t *testing.T) {
 	defer db.Close()
 	res, err := db.Query("select count(1) from upsert_cluster_pt_python;")
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 	defer res.Close()
 	for res.Next() {
 		var result CountResult
 		err := res.Scan(&result.Count)
 		if err != nil {
-			t.Error(err)
+			t.Fatal(err)
 		}
 		fmt.Printf("result is: %v", result)
 	}
@@ -50,7 +50,7 @@ func CheckBulkLoadResult(t *testing.T) {
 func CheckBulkLoadShow(t *testing.T) {
 	db, err := sql.Open("clickzetta", integrationDSN(t))
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 	if db == nil {
 		t.Error("db is nil")
@@ -58,14 +58,14 @@ func CheckBulkLoadShow(t *testing.T) {
 	defer db.Close()
 	res, err := db.Query("show create table upsert_cluster_pt_python;")
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 	defer res.Close()
 	for res.Next() {
 		var result SchemaResult
 		err := res.Scan(&result.Schema)
 		if err != nil {
-			t.Error(err)
+			t.Fatal(err)
 		}
 		fmt.Printf("result is: %v", result)
 	}
@@ -77,7 +77,7 @@ func TestBulkLoadMinorData(t *testing.T) {
 	dsn := integrationDSN(t)
 	conn, err := connect(dsn)
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 	options := BulkloadOptions{
 		Table:     "append_cluster_python",
@@ -85,40 +85,40 @@ func TestBulkLoadMinorData(t *testing.T) {
 	}
 	stream, err := conn.CreateBulkloadStream(options)
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 	writer, err := stream.OpenWriter(0)
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 	row := writer.CreateRow()
 	err = row.SetBigint("id", int64(1))
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 	err = row.SetString("month", "January")
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 	err = row.SetBigint("amount", int64(2))
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 	err = row.SetDecimal("cost", decimal.NewFromFloat(1.1))
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 	err = writer.WriteRow(row)
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 	err = writer.Close()
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 	err = stream.Close()
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 
 }
@@ -128,7 +128,7 @@ func TestBulkLoadMajorData(t *testing.T) {
 	dsn := integrationDSN(t)
 	conn, err := connect(dsn)
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 	options := BulkloadOptions{
 		Table:     "append_cluster_python",
@@ -136,34 +136,34 @@ func TestBulkLoadMajorData(t *testing.T) {
 	}
 	stream, err := conn.CreateBulkloadStream(options)
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 	writer, err := stream.OpenWriter(0)
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 	count := 0
 	for {
 		row := writer.CreateRow()
 		err = row.SetBigint("id", int64(1))
 		if err != nil {
-			t.Error(err)
+			t.Fatal(err)
 		}
 		err = row.SetString("month", "January")
 		if err != nil {
-			t.Error(err)
+			t.Fatal(err)
 		}
 		err = row.SetBigint("amount", int64(2))
 		if err != nil {
-			t.Error(err)
+			t.Fatal(err)
 		}
 		err = row.SetDecimal("cost", decimal.NewFromFloat(1.1))
 		if err != nil {
-			t.Error(err)
+			t.Fatal(err)
 		}
 		err = writer.WriteRow(row)
 		if err != nil {
-			t.Error(err)
+			t.Fatal(err)
 		}
 		count++
 		if count == 100000000 {
@@ -172,11 +172,11 @@ func TestBulkLoadMajorData(t *testing.T) {
 	}
 	err = writer.Close()
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 	err = stream.Close()
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 
 }
@@ -186,7 +186,7 @@ func TestBulkLoadDistributedWriter(t *testing.T) {
 	dsn := integrationDSN(t)
 	conn, err := connect(dsn)
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 	options := BulkloadOptions{
 		Table:     "append_cluster_python",
@@ -194,19 +194,19 @@ func TestBulkLoadDistributedWriter(t *testing.T) {
 	}
 	stream, err := conn.CreateBulkloadStream(options)
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 	streamId := stream.GetStreamId()
 	executorStream, err := conn.GetDistributeBulkloadStream(streamId, options)
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 	var writerList []*BulkloadWriter
 	writerIndex := 0
 	for writerIndex < 5 {
 		writer, err := executorStream.OpenWriter(int64(writerIndex))
 		if err != nil {
-			t.Error(err)
+			t.Fatal(err)
 		}
 		writerList = append(writerList, writer)
 		writerIndex++
@@ -215,33 +215,33 @@ func TestBulkLoadDistributedWriter(t *testing.T) {
 		row := writer.CreateRow()
 		err = row.SetBigint("id", int64(1))
 		if err != nil {
-			t.Error(err)
+			t.Fatal(err)
 		}
 		err = row.SetString("month", "January")
 		if err != nil {
-			t.Error(err)
+			t.Fatal(err)
 		}
 		err = row.SetBigint("amount", int64(2))
 		if err != nil {
-			t.Error(err)
+			t.Fatal(err)
 		}
 		err = row.SetDecimal("cost", decimal.NewFromFloat(1.1))
 		if err != nil {
-			t.Error(err)
+			t.Fatal(err)
 		}
 		err = writer.WriteRow(row)
 		if err != nil {
-			t.Error(err)
+			t.Fatal(err)
 		}
 		err = writer.Close()
 		if err != nil {
-			t.Error(err)
+			t.Fatal(err)
 		}
 	}
 
 	err = executorStream.Close()
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 
 }
@@ -251,7 +251,7 @@ func TestBulkLoadOverwrite(t *testing.T) {
 	dsn := integrationDSN(t)
 	conn, err := connect(dsn)
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 	options := BulkloadOptions{
 		Table:     "append_cluster_python",
@@ -259,40 +259,40 @@ func TestBulkLoadOverwrite(t *testing.T) {
 	}
 	stream, err := conn.CreateBulkloadStream(options)
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 	writer, err := stream.OpenWriter(0)
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 	row := writer.CreateRow()
 	err = row.SetBigint("id", int64(1))
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 	err = row.SetString("month", "January")
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 	err = row.SetBigint("amount", int64(2))
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 	err = row.SetDecimal("cost", decimal.NewFromFloat(1.1))
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 	err = writer.WriteRow(row)
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 	err = writer.Close()
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 	err = stream.Close()
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 
 }
@@ -302,7 +302,7 @@ func TestBulkLoadUpsert(t *testing.T) {
 	dsn := integrationDSN(t)
 	conn, err := connect(dsn)
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 	options := BulkloadOptions{
 		Table:      "append_cluster_python",
@@ -311,40 +311,40 @@ func TestBulkLoadUpsert(t *testing.T) {
 	}
 	stream, err := conn.CreateBulkloadStream(options)
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 	writer, err := stream.OpenWriter(0)
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 	row := writer.CreateRow()
 	err = row.SetBigint("id", int64(1))
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 	err = row.SetString("month", "January")
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 	err = row.SetBigint("amount", int64(2))
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 	err = row.SetDecimal("cost", decimal.NewFromFloat(1.1))
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 	err = writer.WriteRow(row)
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 	err = writer.Close()
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 	err = stream.Close()
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 
 }
@@ -353,7 +353,7 @@ func TestBulkLoadAppendPt(t *testing.T) {
 	dsn := integrationDSN(t)
 	conn, err := connect(dsn)
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 	options := BulkloadOptions{
 		Table:         "upsert_cluster_pt_python",
@@ -362,40 +362,40 @@ func TestBulkLoadAppendPt(t *testing.T) {
 	}
 	stream, err := conn.CreateBulkloadStream(options)
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 	writer, err := stream.OpenWriter(0)
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 	row := writer.CreateRow()
 	err = row.SetBigint("id", int64(1))
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 	err = row.SetString("month", "January")
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 	err = row.SetBigint("amount", int64(2))
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 	err = row.SetDecimal("cost", decimal.NewFromFloat(1.1))
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 	err = writer.WriteRow(row)
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 	err = writer.Close()
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 	err = stream.Close()
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 
 }
@@ -405,7 +405,7 @@ func TestBulkLoadOverwritePt(t *testing.T) {
 	dsn := integrationDSN(t)
 	conn, err := connect(dsn)
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 	options := BulkloadOptions{
 		Table:         "upsert_cluster_pt_python",
@@ -414,40 +414,40 @@ func TestBulkLoadOverwritePt(t *testing.T) {
 	}
 	stream, err := conn.CreateBulkloadStream(options)
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 	writer, err := stream.OpenWriter(0)
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 	row := writer.CreateRow()
 	err = row.SetBigint("id", int64(1))
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 	err = row.SetString("month", "January")
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 	err = row.SetBigint("amount", int64(2))
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 	err = row.SetDecimal("cost", decimal.NewFromFloat(1.1))
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 	err = writer.WriteRow(row)
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 	err = writer.Close()
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 	err = stream.Close()
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 
 }
@@ -457,7 +457,7 @@ func TestBulkLoadUpsertPt(t *testing.T) {
 	dsn := integrationDSN(t)
 	conn, err := connect(dsn)
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 	options := BulkloadOptions{
 		Table:         "upsert_cluster_pt_python",
@@ -467,40 +467,40 @@ func TestBulkLoadUpsertPt(t *testing.T) {
 	}
 	stream, err := conn.CreateBulkloadStream(options)
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 	writer, err := stream.OpenWriter(0)
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 	row := writer.CreateRow()
 	err = row.SetBigint("id", int64(1))
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 	err = row.SetString("month", "January")
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 	err = row.SetBigint("amount", int64(2))
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 	err = row.SetDecimal("cost", decimal.NewFromFloat(1.1))
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 	err = writer.WriteRow(row)
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 	err = writer.Close()
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 	err = stream.Close()
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 
 }
