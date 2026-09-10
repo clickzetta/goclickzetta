@@ -1,1 +1,5 @@
 .qodo
+coverage.txt
+coverage.html
+*.test
+*.pprof

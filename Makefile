@@ -13,29 +13,38 @@ go: check
 	$(CURDIR)/scripts/generate_go.sh
 
 
-## Run tests
-test_setup: test_teardown
-	python3 ci/scripts/hang_webserver.py 12345 &
+## Run the tests that need no server. The DSN is unset on purpose: the
+## integration tests skip themselves without it, so this target means the same
+## thing on a developer machine as it does in CI.
+test:
+	env -u CLICKZETTA_DSN go test -race -count=1 $(COVFLAGS) ./...
 
-test_teardown:
-	kill -9 $$(ps -ewf | grep hang_webserver | grep -v grep | awk '{print $$2}') || true
-
-test: deps test_setup
-	./ci/scripts/test_component.sh
+## Run every test, including the ones that talk to a live instance. Needs
+## CLICKZETTA_DSN.
+test-integration:
+	@test -n "$$CLICKZETTA_DSN" || { echo "CLICKZETTA_DSN is not set" >&2; exit 1; }
+	go test -race -count=1 -timeout 30m $(COVFLAGS) ./...
 
 ## Run Coverage tests
 cov:
-	make test COVFLAGS="-coverprofile=coverage.txt -covermode=atomic"
+	$(MAKE) test COVFLAGS="-coverprofile=coverage.txt -covermode=atomic"
+
+## Run Coverage over the integration tests as well
+cov-integration:
+	$(MAKE) test-integration COVFLAGS="-coverprofile=coverage.txt -covermode=atomic"
 
 
 
 ## Lint
 lint: clint
 
-## Format bulkload codes
+## Format the driver, and any sample program under cmd/ if that directory
+## exists. It does not in this repository, and an unguarded `ls cmd` failed the
+## whole target.
 fmt: cfmt
-	@for c in $$(ls cmd); do \
-		(cd cmd/$$c;  make fmt); \
+	@test -d cmd || exit 0; \
+	for c in $$(ls cmd); do \
+		(cd cmd/$$c;  $(MAKE) fmt); \
 	done
 
 ## Install sample programs
@@ -54,4 +63,4 @@ fuzz-build:
 fuzz-dsn:
 	(cd fuzz-dsn; go-fuzz -bin=./dsn-fuzz.zip -workdir=.)
 
-.PHONY: setup deps update test lint help fuzz-dsn
+.PHONY: setup deps update test test-integration cov cov-integration lint help fuzz-dsn

@@ -1,0 +1,86 @@
+name: CI
+
+on:
+  push:
+    branches: ["main", "arrow_12", "text-result-only"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  unit:
+    name: Unit tests (Go ${{ matrix.go }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The lower bound is the version in go.mod; "stable" catches anything the
+        # current toolchain rejects.
+        go: ["1.19", "stable"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go }}
+          cache: true
+
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "these files are not gofmt clean:" >&2
+            echo "$unformatted" >&2
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go build
+        run: go build ./...
+
+      # No DSN here, so every test that needs a live instance skips itself. This
+      # job therefore has to stay green on a fork with no secrets.
+      - name: go test
+        run: make test
+
+  integration:
+    name: Integration tests
+    needs: unit
+    runs-on: ubuntu-latest
+    # A fork's pull request cannot read the secret, and these tests create and
+    # drop tables in a shared workspace, so only run them for code that already
+    # lives in this repository.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    # The fixture tables have fixed names. Two runs against the same workspace
+    # would drop each other's tables, so serialise them.
+    concurrency:
+      group: clickzetta-integration
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # A missing secret is not a failure: the repository may simply have no
+      # instance to test against. Say so in the log and stop.
+      - name: Look for a DSN
+        id: dsn
+        env:
+          CLICKZETTA_DSN: ${{ secrets.CLICKZETTA_DSN }}
+        run: |
+          if [ -n "$CLICKZETTA_DSN" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::CLICKZETTA_DSN is not configured; skipping the integration tests"
+          fi
+
+      - name: go test
+        if: steps.dsn.outputs.present == 'true'
+        env:
+          CLICKZETTA_DSN: ${{ secrets.CLICKZETTA_DSN }}
+        run: make test-integration
