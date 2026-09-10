@@ -59,4 +59,3 @@ func GetDriverFlag(ctx context.Context, key string) (string, bool) {
 	value, ok := flags[key]
 	return value, ok
 }
-
