@@ -77,8 +77,11 @@ type fieldType struct {
 	DecimalTypeInfo decimalTypeInfo `json:"decimalTypeInfo"`
 }
 
+// charTypeInfo carries the declared width of a CHAR column. The server encodes
+// it as a JSON string, the same way it encodes decimal precision and scale, so
+// the field is a string and parseSchema converts it.
 type charTypeInfo struct {
-	Length int64 `json:"length"`
+	Length string `json:"length"`
 }
 
 type decimalTypeInfo struct {
@@ -332,9 +335,17 @@ func (qd *execResponseData) parseSchema() error {
 				TsUnit:    field.FieldType.TimestampInfo.TsUnit,
 			})
 		} else {
+			var length int64
+			if raw := field.FieldType.CharTypeInfo.Length; raw != "" {
+				parsed, err := strconv.ParseInt(raw, 10, 64)
+				if err != nil {
+					return fmt.Errorf("parse char length: %w", err)
+				}
+				length = parsed
+			}
 			fields = append(fields, execResponseColumnType{
 				Name:      field.Name,
-				Length:    field.FieldType.CharTypeInfo.Length,
+				Length:    length,
 				Type:      field.FieldType.Category,
 				Precision: 0,
 				Scale:     0,
