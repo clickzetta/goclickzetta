@@ -374,8 +374,36 @@ func formatJobFailure(jobID string, responseJson *fastjson.Value) string {
 	return message
 }
 
+// mergeDriverFlagHints copies the driver flags into the statement hints and then
+// declares the escaping convention the driver actually used.
+//
+// The escape mode is written last on purpose: an inline statement hint or a
+// driver flag can carry the same key, and the mode the literals were encoded
+// with is the only value that keeps the driver and the server in agreement. It
+// goes out in its canonical spelling, because configuration may use a numeric
+// alias or a different case and only the names are known to be understood.
+func mergeDriverFlagHints(hints map[string]interface{}, flags DriverFlags, escapeMode sqlEscapeMode) {
+	for k, v := range flags {
+		switch k {
+		case "workspace", "virtualCluster", "schema", "catalog", traceTimingFlag:
+			// these are handled separately as structured request parameters
+			continue
+		default:
+			hints[k] = v
+		}
+	}
+	hints[stringLiteralEscapeModeHint] = string(escapeMode)
+}
+
 func (conn *ClickzettaConn) execInternal(ctx context.Context, query string, bindings []driver.NamedValue) (*execResponse, error) {
 	flags := GetDriverFlags(ctx)
+
+	// The request is JSON-encoded, and encoding/json replaces invalid UTF-8
+	// with U+FFFD without reporting it, so the server would silently run a
+	// different statement than the caller wrote.
+	if !utf8.ValidString(query) {
+		return nil, fmt.Errorf("query is not valid UTF-8")
+	}
 
 	workspace := conn.cfg.Workspace
 	if value, ok := flags["workspace"]; ok && value != "" {
@@ -403,8 +431,31 @@ func (conn *ClickzettaConn) execInternal(ctx context.Context, query string, bind
 	hints["cz.sql.adhoc.default.format"] = "arrow"
 	hints["cz.sql.job.result.file.presigned.url.enabled"] = "true"
 	hints["cz.sql.job.result.file.presigned.url.ttl"] = "3600"
+	// Resolve the escaping convention and declare it to the server for every
+	// statement, not only the interpolated ones: the server parses literals the
+	// application wrote by hand under the same mode.
+	rawEscapeMode := defaultStringEscapeMode
+	if value, ok := flags[stringLiteralEscapeModeHint]; ok {
+		rawEscapeMode = value
+	} else if conn.cfg.Params != nil {
+		if value, ok := conn.cfg.Params[stringLiteralEscapeModeHint]; ok && value != nil {
+			rawEscapeMode = *value
+		}
+	}
+	escapeMode, err := resolveStringEscapeMode(rawEscapeMode)
+	if err != nil {
+		return nil, fmt.Errorf("bind query parameters: %w", err)
+	}
+
 	sdkJobTimeout := 0
-	multiQueries := splitSQL(query)
+	// splitSQL has to know the escape mode: it decides where a string literal
+	// ends, and a semicolon inside one must not split the statement.
+	multiQueries := splitSQL(query, escapeMode)
+	if len(multiQueries) == 0 {
+		// Nothing but separators: there is no statement to run, and the
+		// indexing below would panic on the empty slice.
+		return nil, fmt.Errorf("query contains no statement")
+	}
 
 	// set query as the last query in multiQueries
 	query = multiQueries[len(multiQueries)-1]
@@ -417,20 +468,16 @@ func (conn *ClickzettaConn) execInternal(ctx context.Context, query string, bind
 			return nil, driver.ErrSkip
 		}
 		if hintKV[0] == "sdk.job.timeout" {
-			sdkJobTimeout, _ = strconv.Atoi(hintKV[1])
+			timeout, err := strconv.Atoi(hintKV[1])
+			if err != nil {
+				return nil, fmt.Errorf("invalid sdk.job.timeout hint %q: %w", hintKV[1], err)
+			}
+			sdkJobTimeout = timeout
 			continue
 		}
 		hints[hintKV[0]] = hintKV[1]
 	}
-	for k, v := range flags {
-		switch k {
-		case "workspace", "virtualCluster", "schema", "catalog", traceTimingFlag:
-			// these are handled separately as structured request parameters
-			continue
-		default:
-			hints[k] = v
-		}
-	}
+	mergeDriverFlagHints(hints, flags, escapeMode)
 
 	isSeparate := false
 	if conn.cfg.Params != nil {
@@ -439,15 +486,24 @@ func (conn *ClickzettaConn) execInternal(ctx context.Context, query string, bind
 		}
 	}
 
+	// The Arrow path needs the whole batch in bindings[0], so route to it only
+	// when the binding really is a batch. Otherwise a plain single-row INSERT
+	// under separate_params would skip interpolation and then fail in
+	// convertBindingsToArrowBinary.
+	useArrowBindings := shouldUseArrowBindings(query, bindings, isSeparate)
+
 	// use bindings to fill the ? placeholders in query
-	if len(bindings) > 0 && (!isSeparate || !strings.HasPrefix(query, "INSERT")) {
-		query, _ = replacePlaceholders(query, bindings)
+	if len(bindings) > 0 && !useArrowBindings {
+		interpolatedQuery, err := replacePlaceholders(query, bindings, escapeMode)
+		if err != nil {
+			return nil, fmt.Errorf("bind query parameters: %w", err)
+		}
+		query = interpolatedQuery
 	}
 
 	// convert bindings to Arrow IPC binary data
 	arrowBinary := [][]byte{}
-	err := error(nil)
-	if len(bindings) > 0 && isSeparate && strings.HasPrefix(query, "INSERT") {
+	if useArrowBindings {
 		arrowBinary, err = convertBindingsToArrowBinary(bindings)
 		if err != nil {
 			logger.WithContext(conn.ctx).Errorf("failed to convert bindings to arrow format: %v", err)
@@ -570,7 +626,7 @@ func (conn *ClickzettaConn) execInternal(ctx context.Context, query string, bind
 		if errorCode == errorCodeJobAlreadyExist {
 			if tried == 1 {
 				errMsg := fmt.Sprintf("job %s already exists, cannot resubmit", id.ID)
-				logger.WithContext(ctx).Errorf(errMsg)
+				logger.WithContext(ctx).Errorf("%s", errMsg)
 				finalResponse.Success = false
 				finalResponse.Message = errMsg
 				return finalResponse, errors.New(errMsg)

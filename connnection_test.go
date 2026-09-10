@@ -152,3 +152,38 @@ func TestConnectionSetCatalog(t *testing.T) {
 		t.Error(err)
 	}
 }
+
+func TestMergeDriverFlagHints(t *testing.T) {
+	// flags 与语句内联 hint 都可能带 escape mode 这个键,最终发给服务端的必须是
+	// 驱动实际编码用的规范名,否则两边对字面量的理解会不一致。
+	hints := map[string]interface{}{
+		stringLiteralEscapeModeHint: "2",
+		"cz.sql.adhoc.result.type":  "embedded",
+	}
+	flags := DriverFlags{
+		stringLiteralEscapeModeHint: "2",
+		"workspace":                 "ws",
+		"virtualCluster":            "vc",
+		"schema":                    "sc",
+		"catalog":                   "cat",
+		traceTimingFlag:             "true",
+		"cz.sql.custom":             "value",
+	}
+	mergeDriverFlagHints(hints, flags, escapeQuote)
+
+	if got := hints[stringLiteralEscapeModeHint]; got != string(escapeQuote) {
+		t.Errorf("hints[%s] = %v, want %q", stringLiteralEscapeModeHint, got, string(escapeQuote))
+	}
+	if got := hints["cz.sql.custom"]; got != "value" {
+		t.Errorf("hints[cz.sql.custom] = %v, want %q", got, "value")
+	}
+	if got := hints["cz.sql.adhoc.result.type"]; got != "embedded" {
+		t.Errorf("hints[cz.sql.adhoc.result.type] = %v, want %q", got, "embedded")
+	}
+	// 结构化请求参数不应作为 hint 下发。
+	for _, key := range []string{"workspace", "virtualCluster", "schema", "catalog", traceTimingFlag} {
+		if _, ok := hints[key]; ok {
+			t.Errorf("hints[%s] present, want it handled as a request parameter", key)
+		}
+	}
+}

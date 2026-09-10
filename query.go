@@ -3,7 +3,6 @@ package goclickzetta
 import (
 	"encoding/base64"
 	"net/http"
-	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -57,16 +56,23 @@ type field struct {
 }
 
 type fieldType struct {
-	Category        string          `json:"category"`
-	Nullable        bool            `json:"nullable"`
-	FieldId         int64           `json:"fieldId"`
-	TimestampInfo   timestampInfo   `json:"timestampInfo"`
-	CharTypeInfo    charTypeInfo    `json:"charTypeInfo"`
-	DecimalTypeInfo decimalTypeInfo `json:"decimalTypeInfo"`
+	Category string `json:"category"`
+	Nullable bool   `json:"nullable"`
+	FieldId  int64  `json:"fieldId"`
+	// Pointers on purpose: the server sends only the one sub-object that fits
+	// the column's category, and a nil here is how the schema parser tells
+	// which one arrived. A value type would always be present and every column
+	// would look like the first case.
+	TimestampInfo   *timestampInfo   `json:"timestampInfo"`
+	CharTypeInfo    *charTypeInfo    `json:"charTypeInfo"`
+	DecimalTypeInfo *decimalTypeInfo `json:"decimalTypeInfo"`
 }
 
+// charTypeInfo carries the declared width of a CHAR column. The server encodes
+// it as a JSON string, the same way it encodes decimal precision and scale, so
+// the field is a string and parseSchema converts it.
 type charTypeInfo struct {
-	Length int64 `json:"length"`
+	Length string `json:"length"`
 }
 
 type decimalTypeInfo struct {
@@ -116,12 +122,6 @@ type execResponseData struct {
 	QuerySQL            string
 }
 
-func hasField(obj interface{}, field string) bool {
-	t := reflect.TypeOf(obj)
-	_, ok := t.FieldByName(field)
-	return ok
-}
-
 func (qd *execResponseData) init(diagnostics queryDiagnostics) error {
 	qd.parseSchema(diagnostics)
 	if len(qd.HTTPResponseMessage.HttpResponseMessageResultSet.MemoryData.Data) != 0 {
@@ -141,57 +141,39 @@ func (qd *execResponseData) init(diagnostics queryDiagnostics) error {
 func (qd *execResponseData) parseSchema(diagnostics queryDiagnostics) {
 	fields := make([]execResponseColumnType, 0)
 	for _, field := range qd.HTTPResponseMessage.HttpResponseMessageResultSet.MetaData.Fields {
-		if hasField(field.FieldType, "CharTypeInfo") {
-			fields = append(fields, execResponseColumnType{
-				Name:      field.Name,
-				Length:    field.FieldType.CharTypeInfo.Length,
-				Type:      field.FieldType.Category,
-				Precision: 0,
-				Scale:     0,
-				Nullable:  field.FieldType.Nullable,
-				TsUnit:    "",
-			})
-		} else if hasField(field.FieldType, "DecimalTypeInfo") {
+		column := execResponseColumnType{
+			Name:     field.Name,
+			Type:     field.FieldType.Category,
+			Nullable: field.FieldType.Nullable,
+		}
+		// A column carries at most one of these. Scale in particular has to
+		// survive: the decimal decoder divides by 10^scale, so a missing scale
+		// hands back the unscaled integer, turning 2.5 into 25.
+		switch {
+		case field.FieldType.DecimalTypeInfo != nil:
 			precision, err := strconv.ParseInt(field.FieldType.DecimalTypeInfo.Precision, 10, 64)
 			if err != nil {
-				diagnostics.errorf("error: %v", err)
+				diagnostics.errorf("invalid decimal precision %q for column %q: %v", field.FieldType.DecimalTypeInfo.Precision, field.Name, err)
 				return
 			}
 			scale, err := strconv.ParseInt(field.FieldType.DecimalTypeInfo.Scale, 10, 64)
 			if err != nil {
-				diagnostics.errorf("error: %v", err)
+				diagnostics.errorf("invalid decimal scale %q for column %q: %v", field.FieldType.DecimalTypeInfo.Scale, field.Name, err)
 				return
 			}
-			fields = append(fields, execResponseColumnType{
-				Name:      field.Name,
-				Length:    0,
-				Type:      field.FieldType.Category,
-				Precision: precision,
-				Scale:     scale,
-				Nullable:  field.FieldType.Nullable,
-				TsUnit:    "",
-			})
-		} else if hasField(field.FieldType, "TimestampInfo") {
-			fields = append(fields, execResponseColumnType{
-				Name:      field.Name,
-				Length:    0,
-				Type:      field.FieldType.Category,
-				Precision: 0,
-				Scale:     0,
-				Nullable:  field.FieldType.Nullable,
-				TsUnit:    field.FieldType.TimestampInfo.TsUnit,
-			})
-		} else {
-			fields = append(fields, execResponseColumnType{
-				Name:      field.Name,
-				Length:    0,
-				Type:      field.FieldType.Category,
-				Precision: 0,
-				Scale:     0,
-				Nullable:  field.FieldType.Nullable,
-				TsUnit:    "",
-			})
+			column.Precision = precision
+			column.Scale = scale
+		case field.FieldType.CharTypeInfo != nil:
+			length, err := strconv.ParseInt(field.FieldType.CharTypeInfo.Length, 10, 64)
+			if err != nil {
+				diagnostics.errorf("invalid char length %q for column %q: %v", field.FieldType.CharTypeInfo.Length, field.Name, err)
+				return
+			}
+			column.Length = length
+		case field.FieldType.TimestampInfo != nil:
+			column.TsUnit = field.FieldType.TimestampInfo.TsUnit
 		}
+		fields = append(fields, column)
 	}
 	qd.Schema = fields
 }
