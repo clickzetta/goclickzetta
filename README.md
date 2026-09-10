@@ -30,6 +30,30 @@ For detailed documentation and basic usage examples, please see the documentatio
 
 The developer notes are hosted with the source code on [GitHub](https://github.com/clickzetta/goclickzetta/tree/v0.0.5).
 
+## Running the tests
+
+```bash
+make test              # unit tests only, no instance needed
+make test-integration  # everything, needs CZ_TEST_DSN
+make cov               # unit tests with a coverage profile
+```
+
+The tests that talk to a live instance read the DSN from the `CZ_TEST_DSN`
+environment variable and skip themselves when it is unset, which is what `make
+test` relies on. Point it at a workspace you are willing to have tables created
+and dropped in:
+
+```bash
+export CZ_TEST_DSN='user:password@https(api.clickzetta.com)/workspace?virtualCluster=default&instance=your_instance'
+```
+
+The fixture tables carry fixed names, so two integration runs against the same
+workspace will drop each other's tables. CI serialises them for that reason.
+
+The bulkload suite needs regenerated protos and a set of preexisting fixture
+tables, so it stays behind a second switch: set `CZ_BULKLOAD_TESTS=1` on top of
+the DSN to run it.
+
 ## Example code
 
 * The following example code demonstrates how to use the Go Clickzetta Driver to connect to a Clickzetta account and run a simple query.
