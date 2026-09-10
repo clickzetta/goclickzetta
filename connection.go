@@ -326,7 +326,37 @@ func formatJobFailure(jobID string, responseJson *fastjson.Value) string {
 	return message
 }
 
+// mergeDriverFlagHints copies the driver flags into the statement hints and then
+// declares the escaping convention the driver actually used.
+//
+// The escape mode is written last on purpose: an inline statement hint or a
+// driver flag can carry the same key, and the mode the literals were encoded
+// with is the only value that keeps the driver and the server in agreement. It
+// goes out in its canonical spelling, because configuration may use a numeric
+// alias or a different case and only the names are known to be understood.
+func mergeDriverFlagHints(hints map[string]interface{}, flags DriverFlags, escapeMode sqlEscapeMode) {
+	for k, v := range flags {
+		switch k {
+		case traceTimingFlag:
+			// handled separately as a structured request parameter
+			continue
+		default:
+			hints[k] = v
+		}
+	}
+	hints[stringLiteralEscapeModeHint] = string(escapeMode)
+}
+
 func (conn *ClickzettaConn) execInternal(ctx context.Context, query string, id jobId, bindings []driver.NamedValue) (*execResponse, error) {
+	flags := GetDriverFlags(ctx)
+
+	// The request is JSON-encoded, and encoding/json replaces invalid UTF-8
+	// with U+FFFD without reporting it, so the server would silently run a
+	// different statement than the caller wrote.
+	if !utf8.ValidString(query) {
+		return nil, fmt.Errorf("query is not valid UTF-8")
+	}
+
 	logger.WithContext(ctx).Debugf("execInternal: query_length=%d with jobid: %v", len(query), id.ID)
 	trace := conn.newTimingTrace(ctx)
 	execInternalStart := trace.start()
@@ -347,8 +377,31 @@ func (conn *ClickzettaConn) execInternal(ctx context.Context, query string, id j
 	}
 	hints["cz.sql.adhoc.default.format"] = format
 	hints["cz.storage.csv.asjdbc"] = "false"
+	// Resolve the escaping convention and declare it to the server for every
+	// statement, not only the interpolated ones: the server parses literals the
+	// application wrote by hand under the same mode.
+	rawEscapeMode := defaultStringEscapeMode
+	if value, ok := flags[stringLiteralEscapeModeHint]; ok {
+		rawEscapeMode = value
+	} else if conn.cfg.Params != nil {
+		if value, ok := conn.cfg.Params[stringLiteralEscapeModeHint]; ok && value != nil {
+			rawEscapeMode = *value
+		}
+	}
+	escapeMode, err := resolveStringEscapeMode(rawEscapeMode)
+	if err != nil {
+		return nil, fmt.Errorf("bind query parameters: %w", err)
+	}
+
 	sdkJobTimeout := 0
-	multiQueries := splitSQL(query)
+	// splitSQL has to know the escape mode: it decides where a string literal
+	// ends, and a semicolon inside one must not split the statement.
+	multiQueries := splitSQL(query, escapeMode)
+	if len(multiQueries) == 0 {
+		// Nothing but separators: there is no statement to run, and the
+		// indexing below would panic on the empty slice.
+		return nil, fmt.Errorf("query contains no statement")
+	}
 
 	// set query as the last query in multiQueries
 	query = multiQueries[len(multiQueries)-1]
@@ -361,22 +414,24 @@ func (conn *ClickzettaConn) execInternal(ctx context.Context, query string, id j
 			return nil, driver.ErrSkip
 		}
 		if hintKV[0] == "sdk.job.timeout" {
-			sdkJobTimeout, _ = strconv.Atoi(hintKV[1])
+			timeout, err := strconv.Atoi(hintKV[1])
+			if err != nil {
+				return nil, fmt.Errorf("invalid sdk.job.timeout hint %q: %w", hintKV[1], err)
+			}
+			sdkJobTimeout = timeout
 			continue
 		}
 		hints[hintKV[0]] = hintKV[1]
 	}
-	flags := GetDriverFlags(ctx)
-	for k, v := range flags {
-		if k == traceTimingFlag {
-			continue
-		}
-		hints[k] = v
-	}
+	mergeDriverFlagHints(hints, flags, escapeMode)
 
-	// 用binding来填充query中的？占位符
+	// use bindings to fill the ? placeholders in query
 	if len(bindings) > 0 {
-		query, _ = replacePlaceholders(query, bindings)
+		interpolatedQuery, err := replacePlaceholders(query, bindings, escapeMode)
+		if err != nil {
+			return nil, fmt.Errorf("bind query parameters: %w", err)
+		}
+		query = interpolatedQuery
 	}
 
 	sqlConfig := sqlJobConfig{
@@ -477,7 +532,7 @@ func (conn *ClickzettaConn) execInternal(ctx context.Context, query string, id j
 		if errorCode == errorCodeJobAlreadyExist {
 			if tried == 1 {
 				errMsg := fmt.Sprintf("job %s already exists, cannot resubmit", id.ID)
-				logger.WithContext(ctx).Errorf(errMsg)
+				logger.WithContext(ctx).Errorf("%s", errMsg)
 				finalResponse.Success = false
 				finalResponse.Message = errMsg
 				return finalResponse, errors.New(errMsg)
