@@ -12,11 +12,7 @@ type ClickzettaStmt struct {
 
 func (stmt *ClickzettaStmt) Close() error {
 	logger.WithContext(stmt.conn.ctx).Infoln("Stmt.Close")
-	// noop
-	err := stmt.conn.Close()
-	if err != nil {
-		return err
-	}
+	// Statement 本身无状态，连接归 database/sql 连接池管理
 	return nil
 }
 
