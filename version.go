@@ -1,4 +1,4 @@
 package goclickzetta
 
 // ClickzettaGoDriverVersion is the version of Go Clickzetta Driver.
-const ClickzettaGoDriverVersion = "0.0.7"
+const ClickzettaGoDriverVersion = "1.0.0"

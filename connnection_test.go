@@ -22,7 +22,6 @@ func TestBuildConnection(t *testing.T) {
 	if conn.cfg.Token == "" {
 		t.Fatal("token is empty")
 	}
-	fmt.Println(conn.cfg.Token)
 }
 
 func TestConnectionQuery(t *testing.T) {
@@ -63,7 +62,7 @@ func TestConnectionExec(t *testing.T) {
 		t.Error("token is empty")
 	}
 	tableName := fmt.Sprintf("goclickzetta_conn_it_%d", time.Now().UnixNano())
-	ddl := fmt.Sprintf("CREATE TABLE %s (id BIGINT, first_name STRING, last_name STRING, email STRING, phone STRING, address STRING)", tableName)
+	ddl := fmt.Sprintf("CREATE TABLE %s (id BIGINT PRIMARY KEY, first_name STRING, last_name STRING, email STRING, phone STRING, address STRING)", tableName)
 	t.Cleanup(func() {
 		if _, cleanupErr := conn.Exec(fmt.Sprintf("DROP TABLE IF EXISTS %s", tableName), nil); cleanupErr != nil {
 			t.Errorf("drop connection integration table: %v", cleanupErr)

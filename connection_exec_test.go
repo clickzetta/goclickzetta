@@ -223,6 +223,23 @@ func TestExecInternalSelectsResultFormatFromParams(t *testing.T) {
 	}
 }
 
+func TestExecInternalForwardsServerDSNParams(t *testing.T) {
+	for _, value := range []string{"true", "false"} {
+		t.Run(value, func(t *testing.T) {
+			client := succeedingClient()
+			conn := newTestConn(client)
+			conn.cfg.Params = map[string]*string{"separate_params": &value}
+			if _, err := conn.execInternal(context.Background(), "SELECT 1", jobId{ID: "j-1"}, nil); err != nil {
+				t.Fatalf("execInternal() error = %v", err)
+			}
+			want := `"separate_params":"` + value + `"`
+			if body := client.lastBody(t); !strings.Contains(body, want) {
+				t.Errorf("request does not forward DSN hint %s: %s", want, body)
+			}
+		})
+	}
+}
+
 // The escape mode can come from a driver flag or from a DSN param, the flag
 // wins, and whichever one applies is both used to encode the bindings and
 // declared to the server.

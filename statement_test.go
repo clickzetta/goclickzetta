@@ -39,7 +39,7 @@ func createStmtIntegrationTable(t *testing.T, connection *ClickzettaConn) string
 	tableName := fmt.Sprintf("goclickzetta_stmt_it_%d", time.Now().UnixNano())
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	if _, err := connection.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id BIGINT, name STRING)", tableName), nil); err != nil {
+	if _, err := connection.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id BIGINT PRIMARY KEY, name STRING)", tableName), nil); err != nil {
 		t.Fatalf("create statement integration table: %v", err)
 	}
 	t.Cleanup(func() {

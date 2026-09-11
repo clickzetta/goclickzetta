@@ -117,7 +117,7 @@ func TestCreateBuildsASingleRowInsert(t *testing.T) {
 	// Two spaces after VALUES: clause.Values leaves a trailing one and Create
 	// adds another when it joins the rows on. Harmless, and pinned here so the
 	// expectation matches what actually goes over the wire.
-	want := "INSERT INTO `widgets` (`name`,`count`) VALUES  (\"one\",7)"
+	want := "INSERT INTO `widgets` (`name`,`count`) VALUES  ('one',7)"
 	if got := pool.onlyQuery(t); got != want {
 		t.Errorf("statement =\n%s\nwant\n%s", got, want)
 	}
@@ -136,25 +136,13 @@ func TestCreateBuildsOneStatementForABatch(t *testing.T) {
 		t.Fatalf("Create() error = %v", err)
 	}
 
-	want := "INSERT INTO `widgets` (`name`,`count`) VALUES  (\"a\",1),(\"b\",2)"
+	want := "INSERT INTO `widgets` (`name`,`count`) VALUES  ('a',1),('b',2)"
 	if got := pool.onlyQuery(t); got != want {
 		t.Errorf("statement =\n%s\nwant\n%s", got, want)
 	}
 }
 
-// Every value is rendered with encoding/json, which is not an SQL encoder. This
-// test is the record of what that means, because none of it is obvious from the
-// call site:
-//
-//   - strings arrive double quoted, with JSON escapes, so the server has to read
-//     "..." as a string literal that honours backslash escapes;
-//   - a time.Time arrives as an RFC 3339 string and relies on an implicit cast,
-//     not as the timestamp '...' literal the driver's own binding path produces;
-//   - a nil pointer arrives as the JSON null literal.
-//
-// Contrast this with replacePlaceholders in util.go, which quotes with ' and
-// declares the escape mode it used to the server. The two paths do not agree.
-func TestCreateEncodesValuesWithJSON(t *testing.T) {
+func TestCreateEncodesValuesAsSQLLiterals(t *testing.T) {
 	type jsonWidget struct {
 		Text  string
 		When  time.Time
@@ -177,7 +165,7 @@ func TestCreateEncodesValuesWithJSON(t *testing.T) {
 	}
 
 	want := "INSERT INTO `widgets` (`text`,`when`,`maybe`,`flag`,`ratio`) VALUES " +
-		` ("o'brien \"x\" \\y","2026-09-10T01:02:03.456Z",null,true,1.5)`
+		` ('o\'brien "x" \\y',timestamp '2026-09-10 01:02:03.456+00:00',NULL,true,1.5)`
 	if got := pool.onlyQuery(t); got != want {
 		t.Errorf("statement =\n%s\nwant\n%s", got, want)
 	}
@@ -266,7 +254,7 @@ func TestCreateOmitsAnUnsetAutoincrementKey(t *testing.T) {
 	if err := db.Create(&autoWidget{Name: "a"}).Error; err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
-	want := "INSERT INTO `autos` (`name`) VALUES  (\"a\")"
+	want := "INSERT INTO `autos` (`name`) VALUES  ('a')"
 	if got := pool.onlyQuery(t); got != want {
 		t.Errorf("statement =\n%s\nwant\n%s", got, want)
 	}
@@ -535,19 +523,15 @@ func TestCreateAppliesModelCreateClauses(t *testing.T) {
 	}
 	// The modifier from the model-supplied clause is what proves it was applied:
 	// AddClauseIfNotExists would otherwise have installed a bare clause.Insert.
-	want := "INSERT OVERWRITE INTO `widgets` (`name`,`flag`) VALUES  (\"one\",2)"
+	want := "INSERT OVERWRITE INTO `widgets` (`name`,`flag`) VALUES  ('one',2)"
 	if got := pool.onlyQuery(t); got != want {
 		t.Errorf("statement =\n%s\nwant\n%s", got, want)
 	}
 }
 
-// A value encoding/json cannot marshal aborts Create halfway through, and it
-// does so silently: the function just returns, so no statement is sent and
-// nothing is recorded on db.Error. The caller is told the insert succeeded.
-//
-// This is a defect, pinned here as it stands. NaN reaches it through a plain
-// float64 column, so a caller does not have to do anything exotic to hit it.
-func TestCreateSilentlyDropsUnmarshalableValues(t *testing.T) {
+// Non-finite float values cannot be represented as SQL literals. Create must
+// report that encoding error before sending a statement.
+func TestCreateReportsUnencodableValues(t *testing.T) {
 	type ratioWidget struct {
 		Name  string
 		Ratio float64
@@ -557,8 +541,8 @@ func TestCreateSilentlyDropsUnmarshalableValues(t *testing.T) {
 	db := openGORM(t, pool)
 
 	err := db.Table("widgets").Create(&ratioWidget{Name: "one", Ratio: math.NaN()}).Error
-	if err != nil {
-		t.Fatalf("Create() error = %v; if this now reports the encoding failure, the test should assert that instead", err)
+	if err == nil || !strings.Contains(err.Error(), "non-finite float") {
+		t.Fatalf("Create() error = %v, want a non-finite float error", err)
 	}
 	if len(pool.queries) != 0 {
 		t.Errorf("pool saw %d statements, want none: %q", len(pool.queries), pool.queries)
@@ -597,12 +581,8 @@ type gormIntegrationRow struct {
 }
 
 // The unit tests above pin the SQL text. This one answers the question they
-// cannot: whether the server accepts it. The JSON encoding leaves string values
-// in double quotes with backslash escapes, which is not the form the driver's own
-// binding path produces, so it is worth a round trip against a real instance.
-//
-// A backslash and a double quote survive that encoding. A single quote does not:
-// see TestGORMCreateLosesSingleQuotes.
+// cannot: whether the server accepts it. GORM uses the same SQL literal encoder
+// as database/sql bindings, so this round trip checks that both paths agree.
 func TestGORMCreateRoundTrip(t *testing.T) {
 	db, table, ctx := setUpGORMIntegrationTable(t)
 
@@ -628,21 +608,7 @@ func TestGORMCreateRoundTrip(t *testing.T) {
 	}
 }
 
-// A string holding a single quote is corrupted on the way in: the character is
-// silently dropped and the row lands one byte shorter than it went out.
-//
-// The cause is create.go encoding values with encoding/json, which produces a
-// double-quoted literal. Inside "..." the server only resolves a quote that is
-// escaped, either doubled or preceded by a backslash, and swallows a lone one;
-// the behaviour is the same under every cz.sql.string.literal.escape.mode, so the
-// hint cannot rescue it. The
-// driver's own binding path does not have the problem, because it quotes with '
-// and escapes accordingly.
-//
-// This test records the defect rather than the intent. Fixing create.go to quote
-// the way util.go does will make it fail, which is the point: the assertion is
-// where the fix should be confirmed.
-func TestGORMCreateLosesSingleQuotes(t *testing.T) {
+func TestGORMCreatePreservesSingleQuotes(t *testing.T) {
 	db, table, ctx := setUpGORMIntegrationTable(t)
 
 	row := gormIntegrationRow{Num: 1, Name: "o'brien"}
@@ -654,11 +620,8 @@ func TestGORMCreateLosesSingleQuotes(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("read back %d rows, want 1: %+v", len(got), got)
 	}
-	if got[0].Name == row.Name {
-		t.Fatalf("single quotes now survive Create(); create.go was fixed, so this test should be replaced by a round-trip assertion")
-	}
-	if got[0].Name != "obrien" {
-		t.Errorf("name = %q, want %q, the value with the quote dropped", got[0].Name, "obrien")
+	if got[0].Name != row.Name {
+		t.Errorf("name = %q, want %q", got[0].Name, row.Name)
 	}
 }
 
@@ -685,7 +648,7 @@ func setUpGORMIntegrationTable(t *testing.T) (*gorm.DB, string, context.Context)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	t.Cleanup(cancel)
 
-	if err := db.WithContext(ctx).Exec(fmt.Sprintf("CREATE TABLE %s (id BIGINT, name STRING)", table)).Error; err != nil {
+	if err := db.WithContext(ctx).Exec(fmt.Sprintf("CREATE TABLE %s (id BIGINT PRIMARY KEY, name STRING)", table)).Error; err != nil {
 		t.Fatalf("create table: %v", err)
 	}
 	t.Cleanup(func() {

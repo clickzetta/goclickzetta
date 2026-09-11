@@ -112,7 +112,7 @@ func TestTransactionsDoNotIsolateWrites(t *testing.T) {
 	table := fmt.Sprintf("goclickzetta_tx_it_%d", time.Now().UnixNano())
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
-	if _, err := db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id BIGINT)", table)); err != nil {
+	if _, err := db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id BIGINT PRIMARY KEY)", table)); err != nil {
 		t.Fatalf("create table: %v", err)
 	}
 	t.Cleanup(func() {

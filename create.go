@@ -1,7 +1,6 @@
 package goclickzetta
 
 import (
-	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -35,11 +34,12 @@ func (dialector *Dialector) Create(db *gorm.DB) {
 					// value is typically []interface{} (one row). If it's a slice, stringify it
 					parts := make([]string, 0, len(value))
 					for _, v := range value {
-						b, err := json.Marshal(v)
-						if err != nil {
+						var encoded strings.Builder
+						if err := appendSQLValue(&encoded, v, escapeBackslash); err != nil {
+							db.AddError(fmt.Errorf("encode create value: %w", err))
 							return
 						}
-						parts = append(parts, string(b))
+						parts = append(parts, encoded.String())
 					}
 					row := fmt.Sprintf("(%s)", strings.Join(parts, ","))
 					allParts = append(allParts, row)

@@ -377,6 +377,22 @@ func (conn *ClickzettaConn) execInternal(ctx context.Context, query string, id j
 	}
 	hints["cz.sql.adhoc.default.format"] = format
 	hints["cz.storage.csv.asjdbc"] = "false"
+	// Forward server-side DSN parameters as hints. A few parameters are
+	// client-side controls and are handled explicitly below or by the retry and
+	// tracing paths; sending those raw would produce conflicting requests.
+	if conn.cfg != nil && conn.cfg.Params != nil {
+		for key, value := range conn.cfg.Params {
+			if value == nil {
+				continue
+			}
+			switch key {
+			case "resultFormat", "sdk.query.max.retries", traceTimingFlag, stringLiteralEscapeModeHint:
+				continue
+			default:
+				hints[key] = *value
+			}
+		}
+	}
 	// Resolve the escaping convention and declare it to the server for every
 	// statement, not only the interpolated ones: the server parses literals the
 	// application wrote by hand under the same mode.

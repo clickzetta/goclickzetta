@@ -82,6 +82,14 @@ func (rows *clickzettaRows) NextResultSet() error {
 	if rows.currentBatchSize > 0 && rows.currentBatchIndex < rows.currentBatchSize {
 		return nil
 	}
+	if rows.currentBatchSize > 0 {
+		if err := rows.GetResultRows(); err != nil {
+			return err
+		}
+	}
+	if len(rows.response.Data.Data) == 0 {
+		return io.EOF
+	}
 	rows.currentBatchIndex = 0
 	rows.currentBatchSize = len(rows.response.Data.Data)
 	return nil

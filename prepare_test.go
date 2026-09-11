@@ -78,7 +78,7 @@ func TestPreparedStatementRoundTrip(t *testing.T) {
 	table := fmt.Sprintf("goclickzetta_prep_it_%d", time.Now().UnixNano())
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
-	if _, err := db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id BIGINT, name STRING)", table)); err != nil {
+	if _, err := db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id BIGINT PRIMARY KEY, name STRING)", table)); err != nil {
 		t.Fatalf("create table: %v", err)
 	}
 	t.Cleanup(func() {

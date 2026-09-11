@@ -76,7 +76,7 @@ func TestSqlOpen(t *testing.T) {
 	tableName := fmt.Sprintf("goclickzetta_sql_it_%d", time.Now().UnixNano())
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	if _, err := db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id BIGINT, name STRING)", tableName)); err != nil {
+	if _, err := db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (id BIGINT PRIMARY KEY, name STRING)", tableName)); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {

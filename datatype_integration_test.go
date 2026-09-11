@@ -197,7 +197,8 @@ func TestDataTypeRoundTrip(t *testing.T) {
 
 func createDataTypeTable(t *testing.T, db *sql.DB, tableName string, cols []roundTripColumn) {
 	t.Helper()
-	defs := make([]string, 0, len(cols))
+	defs := make([]string, 0, len(cols)+1)
+	defs = append(defs, "row_id BIGINT PRIMARY KEY")
 	for _, c := range cols {
 		defs = append(defs, c.name+" "+c.sqlType)
 	}
@@ -217,9 +218,16 @@ func createDataTypeTable(t *testing.T, db *sql.DB, tableName string, cols []roun
 func assertRoundTrip(t *testing.T, db *sql.DB, tableName string, cols []roundTripColumn, nulls bool) {
 	t.Helper()
 
-	names := make([]string, 0, len(cols))
-	marks := make([]string, 0, len(cols))
-	args := make([]interface{}, 0, len(cols))
+	names := make([]string, 0, len(cols)+1)
+	marks := make([]string, 0, len(cols)+1)
+	args := make([]interface{}, 0, len(cols)+1)
+	names = append(names, "row_id")
+	marks = append(marks, "?")
+	rowID := int64(1)
+	if nulls {
+		rowID = 2
+	}
+	args = append(args, rowID)
 	for _, c := range cols {
 		names = append(names, c.name)
 		marks = append(marks, "?")
@@ -245,7 +253,7 @@ func assertRoundTrip(t *testing.T, db *sql.DB, tableName string, cols []roundTri
 	if nulls {
 		predicate = "c_int IS NULL"
 	}
-	query := fmt.Sprintf("SELECT %s FROM %s WHERE %s", strings.Join(names, ", "), tableName, predicate)
+	query := fmt.Sprintf("SELECT %s FROM %s WHERE %s", strings.Join(names[1:], ", "), tableName, predicate)
 
 	dest := make([]interface{}, len(cols))
 	scan := make([]interface{}, len(cols))
