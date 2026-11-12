@@ -42,23 +42,19 @@ func TestPrepareKeepsQueryVerbatim(t *testing.T) {
 	}
 }
 
-// TestStmtCloseTearsDownTheConnection pins a bug. ClickzettaStmt.Close calls
-// Close on the connection it was prepared on, which runs cleanup: the HTTP
-// client is closed and cfg and ctx are set to nil. Under database/sql a
-// statement and the connection that carries it have separate lifetimes - closing
-// a statement is routine and is not supposed to destroy the connection, which
-// stays in the pool and gets handed to the next caller in this state.
-//
-// The fix is for Close to be the no-op its own comment already claims it is.
-// This test fails then, and should be deleted at that point.
-func TestStmtCloseTearsDownTheConnection(t *testing.T) {
+// TestStmtCloseKeepsTheConnection guards the fix for a bug where
+// ClickzettaStmt.Close closed the connection it was prepared on, nilling cfg
+// and ctx. Under database/sql a statement and its connection have separate
+// lifetimes: closing a statement is routine, and the connection stays in the
+// pool for the next caller.
+func TestStmtCloseKeepsTheConnection(t *testing.T) {
 	conn := newTestConn(&mockInternalClient{})
 	stmt := &ClickzettaStmt{conn: conn, query: "SELECT 1"}
 	if err := stmt.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
-	if conn.cfg != nil || conn.ctx != nil {
-		t.Fatal("Stmt.Close no longer tears the connection down, the bug is fixed; delete this test")
+	if conn.cfg == nil || conn.ctx == nil || conn.internal == nil {
+		t.Fatal("Stmt.Close tore the connection down")
 	}
 }
 
