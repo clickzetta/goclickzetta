@@ -127,6 +127,7 @@ func (desc *jobDesc) properties() map[string]interface{} {
 		"hybridPollingTimeout": desc.HybirdPollingTimeout,
 		"jobConfig":            desc.JobConfig,
 		"sqlJob":               desc.SQLJob.properties(),
+		"userAgent":            desc.UserAgent,
 	}
 }
 
