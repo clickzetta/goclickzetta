@@ -413,6 +413,7 @@ func (conn *ClickzettaConn) execInternal(ctx context.Context, query string, bind
 	hints := make(map[string]interface{})
 	hints["cz.sql.adhoc.result.type"] = "embedded"
 	hints["cz.sql.adhoc.default.format"] = "arrow"
+	hints[sdkInfoHint] = sdkInfo()
 	// Resolve the escaping convention and declare it to the server for every
 	// statement, not only the interpolated ones: the server parses literals the
 	// application wrote by hand under the same mode.
@@ -539,7 +540,7 @@ func (conn *ClickzettaConn) execInternal(ctx context.Context, query string, bind
 		JobConfig:            map[string]interface{}{},
 		SQLJob:               &sqljob,
 		JobTimeout:           3000,
-		UserAgent:            "goclickzetta",
+		UserAgent:            clientIP(conn.cfg.Service),
 		Priority:             0,
 	}
 
