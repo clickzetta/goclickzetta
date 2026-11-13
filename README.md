@@ -8,7 +8,7 @@ The following software packages are required to use the Go Clickzetta Driver.
 
 ## Go
 
-The latest driver requires the [Go language](https://golang.org/) 1.19 or higher. The supported operating systems are Linux, Mac OS, and Windows, but you may run the driver on other platforms if the Go language works correctly on those platforms.
+The latest driver requires the [Go language](https://golang.org/) 1.25 or higher. The supported operating systems are Linux, Mac OS, and Windows, but you may run the driver on other platforms if the Go language works correctly on those platforms.
 
 
 
@@ -19,6 +19,37 @@ Get goclickzetta source code, if not installed.
 ```sh
 go get -u github.com/clickzetta/goclickzetta
 ```
+
+# Versions and Variants
+
+Only the `main` branch is under active development. It decodes results with
+Apache Arrow (`github.com/apache/arrow-go/v18`) and is released as plain
+`vX.Y.Z` tags, which is what `go get -u` and `@latest` resolve to.
+
+Two older variants exist for applications that cannot take that dependency
+set. Both are **frozen**: they receive fixes for security issues and severe
+bugs (wrong results, failures to connect or run queries) only, and no new
+features.
+
+| Branch | Results | Arrow dependency | Go | Tags | For applications that |
+|---|---|---|---|---|---|
+| `main` | Arrow | `arrow-go/v18` | 1.25+ | `vX.Y.Z` | can use a current Arrow |
+| `arrow_12` (frozen) | Arrow | `arrow/go/v12` | 1.19+ | `vX.Y.Z-arrow12` | must stay on Arrow v12 |
+| `text-result-only` (frozen) | CSV | none | 1.19+ | `vX.Y.Z-csv` | cannot depend on Arrow at all, e.g. because an old `github.com/apache/thrift` (v0.13 or earlier) conflicts with the newer thrift that Arrow requires |
+
+Go treats a tag with a suffix as a pre-release, so `go get -u` never selects a
+variant. Install a variant by its exact tag, for example:
+
+```sh
+go get github.com/clickzetta/goclickzetta@v0.0.19-arrow12
+```
+
+and keep that version pinned in `go.mod`. If another dependency in the build
+requires a higher `goclickzetta` version, Go replaces the variant with a `main`
+release, so check `go list -m github.com/clickzetta/goclickzetta` after
+upgrading other modules.
+
+New applications should use `main`.
 <!-- 
 # Docs
 
@@ -28,7 +59,7 @@ For detailed documentation and basic usage examples, please see the documentatio
 
 # Development
 
-The developer notes are hosted with the source code on [GitHub](https://github.com/clickzetta/goclickzetta/tree/v0.0.5).
+The developer notes are hosted with the source code on [GitHub](https://github.com/clickzetta/goclickzetta).
 
 ## Running the tests
 

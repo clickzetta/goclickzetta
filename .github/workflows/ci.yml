@@ -14,8 +14,8 @@ jobs:
       fail-fast: false
       matrix:
         # The lower bound is the version in go.mod; "stable" catches anything the
-        # current toolchain rejects.
-        go: ["1.19", "stable"]
+        # current toolchain rejects. Keep the first entry in step with go.mod.
+        go: ["1.25", "stable"]
     steps:
       - uses: actions/checkout@v4
 
