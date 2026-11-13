@@ -1,5 +1,9 @@
 # Go Clickzetta Driver
 
+> **This branch is frozen.** `arrow_12` is the Arrow v12 variant of the Go Clickzetta Driver. It decodes results with `github.com/apache/arrow/go/v12` and supports Go 1.19 and later, for applications that must stay on Arrow v12.
+>
+> It receives fixes for security issues and severe bugs (wrong results, failures to connect or run queries) only, and no new features. New applications should use the [`main` branch](https://github.com/clickzetta/goclickzetta), which is the only one under active development.
+
 This topic provides instructions for installing, running, and modifying the Go Clickzetta Driver. The driver supports Go's [database/sql](https://golang.org/pkg/database/sql/) package.
 
 # Prerequisites
@@ -14,11 +18,13 @@ The latest driver requires the [Go language](https://golang.org/) 1.19 or higher
 
 # Installation
 
-Get goclickzetta source code, if not installed.
+Releases of this variant are tagged `vX.Y.Z-arrow12`. Go treats a tag with a suffix as a pre-release, so `go get -u` and `@latest` install a `main` release instead. Install this variant by its exact tag, choosing the newest `-arrow12` tag, for example:
 
 ```sh
-go get -u github.com/clickzetta/goclickzetta
+go get github.com/clickzetta/goclickzetta@v0.0.19-arrow12
 ```
+
+Keep that version pinned in `go.mod`. If another dependency in the build requires a higher `goclickzetta` version, Go replaces this variant with a `main` release, so check `go list -m github.com/clickzetta/goclickzetta` after upgrading other modules.
 <!-- 
 # Docs
 
