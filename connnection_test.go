@@ -5,27 +5,27 @@ import (
 	"database/sql/driver"
 	"fmt"
 	"io"
+	"os"
 	"testing"
 
 	"github.com/zeebo/assert"
 )
 
-func newTestConfig() Config {
-	return Config{
-		UserName:       "weiliu",
-		Password:       "Abc123456",
-		Protocol:       "http",
-		Service:        "http://uat-api.clickzetta.com",
-		Instance:       "jnsxwfyr",
-		Workspace:      "weiliu",
-		VirtualCluster: "default_ap",
-		Schema:         "public",
+func newTestConfig(t *testing.T) Config {
+	dsn := os.Getenv("CZ_TEST_DSN")
+	if dsn == "" {
+		t.Skip("CZ_TEST_DSN not set, skipping integration test")
 	}
+	cfg, err := ParseDSN(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return *cfg
 }
 
 func TestBuildConnection(t *testing.T) {
 	ctx := context.TODO()
-	conn, err := buildClickzettaConn(ctx, newTestConfig())
+	conn, err := buildClickzettaConn(ctx, newTestConfig(t))
 	if err != nil {
 		t.Error(err)
 	}
@@ -41,7 +41,7 @@ func TestBuildConnection(t *testing.T) {
 
 func TestConnectionQuery(t *testing.T) {
 	ctx := context.TODO()
-	conn, err := buildClickzettaConn(ctx, newTestConfig())
+	conn, err := buildClickzettaConn(ctx, newTestConfig(t))
 	if err != nil {
 		t.Error(err)
 	}
@@ -64,7 +64,7 @@ func TestConnectionQuery(t *testing.T) {
 
 func TestConnectionExec(t *testing.T) {
 	ctx := context.TODO()
-	conn, err := buildClickzettaConn(ctx, newTestConfig())
+	conn, err := buildClickzettaConn(ctx, newTestConfig(t))
 	if err != nil {
 		t.Error(err)
 	}
@@ -106,7 +106,7 @@ func TestConnectionExec(t *testing.T) {
 
 func TestConnectionPing(t *testing.T) {
 	ctx := context.TODO()
-	conn, err := buildClickzettaConn(ctx, newTestConfig())
+	conn, err := buildClickzettaConn(ctx, newTestConfig(t))
 	if err != nil {
 		t.Error(err)
 	}
@@ -122,7 +122,7 @@ func TestConnectionPing(t *testing.T) {
 
 func TestConnectionSetCatalog(t *testing.T) {
 	ctx := context.TODO()
-	conn, err := buildClickzettaConn(ctx, newTestConfig())
+	conn, err := buildClickzettaConn(ctx, newTestConfig(t))
 	if err != nil {
 		t.Error(err)
 	}
