@@ -191,6 +191,9 @@ func ParseDSN(dsn string) (cfg *Config, err error) {
 				cfg.Protocol = dsn[j+1 : k]
 			}
 
+			if cfg.Protocol == "" && cfg.Service != "" {
+				cfg.Protocol = "https"
+			}
 			if cfg.Protocol == "http" || cfg.Protocol == "https" {
 				cfg.Service = cfg.Protocol + "://" + cfg.Service
 			}

@@ -54,3 +54,16 @@ func TestDSNStringToConfig(t *testing.T) {
 		t.Errorf("Expected %s, got %s", "test", cfg.Instance)
 	}
 }
+
+// The protocol is optional in the DSN and defaults to https. The default must
+// also reach the service URL, otherwise requests fail with
+// `unsupported protocol scheme ""`.
+func TestDSNWithoutProtocolDefaultsServiceToHTTPS(t *testing.T) {
+	cfg, err := ParseDSN("test:test@(dev.us-east-1)/public?virtualCluster=test&workspace=test&instance=test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Protocol != "https" || cfg.Service != "https://dev.us-east-1" {
+		t.Fatalf("protocol=%q service=%q, want https and https://dev.us-east-1", cfg.Protocol, cfg.Service)
+	}
+}
