@@ -22,7 +22,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/clickzetta/goclickzetta/protos/bulkload/ingestion"
-	"github.com/clickzetta/goclickzetta/protos/bulkload/util"
 	"github.com/golang/protobuf/jsonpb"
 	"github.com/golang/protobuf/proto"
 	rlog "github.com/sirupsen/logrus"
@@ -1082,86 +1081,9 @@ func (conn *ClickzettaConn) Ping(ctx context.Context) error {
 	return err
 }
 
+// CreateBulkloadStream always returns ErrBulkloadNotSupported in this build.
 func (conn *ClickzettaConn) CreateBulkloadStream(option BulkloadOptions) (*BulkloadStream, error) {
-	if option.Operation == "" {
-		option.Operation = APPEND
-	}
-	createBulkloadStreamReq := ingestion.CreateBulkLoadStreamRequest{}
-	account := ingestion.Account{}
-	userIdent := ingestion.UserIdentifier{}
-	userIdent.InstanceId = 0
-	userIdent.Workspace = conn.cfg.Workspace
-	userIdent.UserName = conn.cfg.UserName
-	account.UserIdent = &userIdent
-	account.Token = conn.cfg.Token
-	createBulkloadStreamReq.Account = &account
-	tableIdentifier := ingestion.TableIdentifier{}
-	tableIdentifier.SchemaName = conn.cfg.Schema
-	tableIdentifier.TableName = option.Table
-	tableIdentifier.Workspace = conn.cfg.Workspace
-	tableIdentifier.InstanceId = 0
-	createBulkloadStreamReq.Identifier = &tableIdentifier
-	if option.Operation == APPEND {
-		createBulkloadStreamReq.Operation = ingestion.BulkLoadStreamOperation_BL_APPEND
-	} else if option.Operation == UPSERT {
-		createBulkloadStreamReq.Operation = ingestion.BulkLoadStreamOperation_BL_UPSERT
-	} else {
-		createBulkloadStreamReq.Operation = ingestion.BulkLoadStreamOperation_BL_OVERWRITE
-	}
-	if option.PartitionSpec != "" {
-		createBulkloadStreamReq.PartitionSpec = option.PartitionSpec
-	}
-	if option.RecordKeys != nil {
-		createBulkloadStreamReq.RecordKeys = option.RecordKeys
-	}
-	gateWayRes, err := conn.GateWayCall(&createBulkloadStreamReq, ingestion.MethodEnum_CREATE_BULK_LOAD_STREAM_V2)
-	if err != nil {
-		logger.WithContext(conn.ctx).Errorf("create bulkload stream error: %v", err)
-		return nil, err
-	}
-	val, err := gateWayRes.StringBytes()
-	if err != nil {
-		logger.WithContext(conn.ctx).Errorf("create bulkload stream error: %v", err)
-		return nil, err
-	}
-
-	reader := bytes.NewReader(val)
-	createBLSRes := ingestion.CreateBulkLoadStreamResponse{}
-	err = jsonpb.Unmarshal(reader, &createBLSRes)
-	if err != nil {
-		logger.WithContext(conn.ctx).Errorf("create bulkload stream error: %v", err)
-		return nil, err
-	}
-	if createBLSRes.GetStatus().GetCode() != 0 {
-		logger.WithContext(conn.ctx).Errorf("create bulkload stream error: %v", gateWayRes.String())
-		return nil, errors.New(gateWayRes.String())
-	}
-	conn.cfg.InstanceId = createBLSRes.GetInfo().GetIdentifier().GetInstanceId()
-	BMD := BulkloadMetadata{}
-	BMD.InstanceId = createBLSRes.GetInfo().GetIdentifier().GetInstanceId()
-	BMD.StreamInfo = createBLSRes.GetInfo()
-	table := CZTable{
-		TableName:  option.Table,
-		SchemaName: conn.cfg.Schema,
-		TableMeta:  createBLSRes.GetInfo().GetStreamSchema(),
-		Schema:     make(map[string]*util.DataType),
-	}
-	for _, field := range table.TableMeta.GetDataFields() {
-		table.Schema[field.GetName()] = field.GetType()
-	}
-	BMD.Table = table
-	commitOpt := BulkloadCommitOptions{}
-	commitOpt.Workspace = conn.cfg.Workspace
-	commitOpt.VirtualCluster = conn.cfg.VirtualCluster
-
-	bulkloadStream := BulkloadStream{}
-	bulkloadStream.MetaData = &BMD
-	bulkloadStream.Connection = conn
-	bulkloadStream.CommitOptions = &commitOpt
-	bulkloadStream.Closed = false
-	bulkloadStream.StreamOptions = &option
-
-	return &bulkloadStream, nil
+	return nil, ErrBulkloadNotSupported
 }
 
 func (conn *ClickzettaConn) CommitBulkloadStream(streamId string, commitMode BulkLoadCommitMode, option BulkloadOptions) (*BulkloadMetadata, error) {
@@ -1263,69 +1185,9 @@ func (conn *ClickzettaConn) GetBulkloadStream(streamId string, option BulkloadOp
 	return &BMD, nil
 }
 
+// GetDistributeBulkloadStream always returns ErrBulkloadNotSupported in this build.
 func (conn *ClickzettaConn) GetDistributeBulkloadStream(streamId string, option BulkloadOptions) (*BulkloadStream, error) {
-	getBulkloadStreamReq := ingestion.GetBulkLoadStreamRequest{}
-	account := ingestion.Account{}
-	userIdent := ingestion.UserIdentifier{}
-	userIdent.InstanceId = conn.cfg.InstanceId
-	userIdent.Workspace = conn.cfg.Workspace
-	userIdent.UserName = conn.cfg.UserName
-	account.UserIdent = &userIdent
-	account.Token = conn.cfg.Token
-	getBulkloadStreamReq.Account = &account
-	tableIdentifier := ingestion.TableIdentifier{}
-	tableIdentifier.SchemaName = conn.cfg.Schema
-	tableIdentifier.TableName = option.Table
-	tableIdentifier.Workspace = conn.cfg.Workspace
-	tableIdentifier.InstanceId = conn.cfg.InstanceId
-	getBulkloadStreamReq.Identifier = &tableIdentifier
-	getBulkloadStreamReq.StreamId = streamId
-	getBulkloadStreamReq.NeedTableMeta = true
-	jsonRes, err := conn.GateWayCall(&getBulkloadStreamReq, ingestion.MethodEnum_GET_BULK_LOAD_STREAM_V2)
-	if err != nil {
-		logger.WithContext(conn.ctx).Errorf("get bulkload stream error: %v", err)
-		return nil, err
-	}
-	bye, err := jsonRes.StringBytes()
-	if err != nil {
-		logger.WithContext(conn.ctx).Errorf("get bulkload stream error: %v", err)
-		return nil, err
-	}
-	reader := bytes.NewReader(bye)
-	getBLSRes := ingestion.GetBulkLoadStreamResponse{}
-	err = jsonpb.Unmarshal(reader, &getBLSRes)
-	if err != nil {
-		logger.WithContext(conn.ctx).Errorf("get bulkload stream error: %v", err)
-		return nil, err
-	}
-	if getBLSRes.GetStatus().GetCode() != 0 {
-		logger.WithContext(conn.ctx).Errorf("get bulkload stream error: %v", jsonRes.String())
-		return nil, errors.New(jsonRes.String())
-	}
-	BMD := BulkloadMetadata{}
-	BMD.InstanceId = getBLSRes.GetInfo().GetIdentifier().GetInstanceId()
-	BMD.StreamInfo = getBLSRes.GetInfo()
-	table := CZTable{
-		TableName:  option.Table,
-		SchemaName: conn.cfg.Schema,
-		TableMeta:  getBLSRes.GetInfo().GetStreamSchema(),
-		Schema:     make(map[string]*util.DataType),
-	}
-	for _, field := range table.TableMeta.GetDataFields() {
-		table.Schema[field.GetName()] = field.GetType()
-	}
-	BMD.Table = table
-	commitOpt := BulkloadCommitOptions{}
-	commitOpt.Workspace = conn.cfg.Workspace
-	commitOpt.VirtualCluster = conn.cfg.VirtualCluster
-
-	bulkloadStream := BulkloadStream{}
-	bulkloadStream.MetaData = &BMD
-	bulkloadStream.Connection = conn
-	bulkloadStream.CommitOptions = &commitOpt
-	bulkloadStream.Closed = false
-	bulkloadStream.StreamOptions = &option
-	return &bulkloadStream, nil
+	return nil, ErrBulkloadNotSupported
 }
 
 func (conn *ClickzettaConn) OpenBulkloadStreamWriter(streamId string, option BulkloadOptions, partitionId uint32) (*BulkLoadConfig, error) {

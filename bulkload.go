@@ -22,6 +22,12 @@ import (
 	"github.com/tencentyun/cos-go-sdk-v5"
 )
 
+// ErrBulkloadNotSupported is returned by CreateBulkloadStream and
+// GetDistributeBulkloadStream. BulkLoad uploads parquet files, which this
+// build cannot write because it has no Arrow dependency. Earlier versions
+// accepted rows, wrote nothing and reported a successful commit.
+var ErrBulkloadNotSupported = errors.New("goclickzetta: BulkLoad is not supported in the text-result-only (-csv) build because it has no Arrow dependency; use INSERT statements or the main version")
+
 type BulkloadStream struct {
 	MetaData      *BulkloadMetadata
 	Connection    *ClickzettaConn

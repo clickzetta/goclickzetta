@@ -94,35 +94,6 @@ for res.Next() {
 
 
 ```
-* The following example code demonstrates how to use the Go Clickzetta connection to write batch data to a Clickzetta table.
-
-```go
-dsn := "${username}:${pwd}@${protocol}(${service}/${schema}?virtualCluster=${vc}&workspace=${workspace}&instance=${instanceName}"
-conn, err := connect(dsn)
-if err != nil {
-t.Error(err)
-}
-options := BulkloadOptions{
-Table:     "table",
-Operation: APPEND,
-}
-stream, err := conn.CreateBulkloadStream(options)
-writer, err := stream.OpenWriter(0)
-row := writer.CreateRow()
-row.SetBigint("id", int64(1))
-
-row.SetString("month", "January")
-
-row.SetBigint("amount", int64(2))
-
-row.SetDecimal("cost", decimal.NewFromFloat(1.1))
-
-writer.WriteRow(row)
-
-writer.Close()
-stream.Close()
-```
-
 More examples can be found in the [examples](https://github.com/clickzetta/goclickzetta/blob/main/statement_test.go).
 
 ## DSN (Data Source Name)
@@ -213,29 +184,15 @@ The caller owns the safety of that fragment; never build a `RawSQLValue` from un
 >
 > A `time.Time` binding now carries its zone offset into the literal, where earlier versions emitted a bare wall clock. This one changes data rather than raising an error: writing a value whose zone differs from the server session zone into a `TIMESTAMP` (`TIMESTAMP_LTZ`) column now stores the instant the value denotes, not the same wall clock reinterpreted in the server's zone. Call `In()` if the previous rendering is what you want — see [Time Bindings](#time-bindings).
 
-When User use the Clickzetta driver to execute SQL and write batch data , must construct the DSN.
+When User use the Clickzetta driver to execute SQL, must construct the DSN.
 
 ## BulkLoad
-Users can use BulkLoad to write data to Clickzetta.BulkLoad has three modes: APPEND, OVERWRITE, and UPSERT. The default mode is APPEND.
-* **APPEND**: The APPEND mode appends data to the table. 
-* **OVERWRITE**: The OVERWRITE mode overwrites the table. If the table has data, the data is deleted. 
-* **UPSERT**: The UPSERT mode updates the table. Users must specify the primary key when using this mode. If the primary key exists, the data is updated. If the primary key does not exist, the data is inserted.
 
+BulkLoad is **not supported** in this variant. BulkLoad uploads data as parquet files, which cannot be written without Apache Arrow. `CreateBulkloadStream` and `GetDistributeBulkloadStream` return `ErrBulkloadNotSupported`.
 
+Earlier versions of this variant accepted rows but never wrote or uploaded any file, so a "successful" BulkLoad committed no data. Against current servers they fail earlier, when creating the stream, with `unknown field "partial_update_columns"`.
 
-## Row
-Users can use Row to write data to Clickzetta. Row has the following methods:
-* **SetBigint**: Sets the value of a int64 column.
-* **SetBoolean**: Sets the value of a boolean column.
-* **SetDate**: Sets the value of a date column. (value should be string. eg: "2023-01-01")
-* **SetDecimal**: Sets the value of a decimal.Decimal column.
-* **SetDouble**: Sets the value of a float64 column.
-* **SetFloat**: Sets the value of a float32 column.
-* **SetInt**: Sets the value of an int32 column.
-* **SetSmallint**: Sets the value of a int16 column.
-* **SetString**: Sets the value of a string column.
-* **SetTimestamp**: Sets the value of a timestamp column. (value should be string. eg: "2023-01-01 00:00:00")
-* **SetTinyInt**: Sets the value of an int8 column.
+To load data, use `INSERT` statements through `database/sql`, or use the main version (`vX.Y.Z`), which supports BulkLoad.
 
 ## Support
 
