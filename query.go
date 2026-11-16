@@ -240,6 +240,10 @@ func arrowToRows(diagnostics queryDiagnostics, qd *execResponseData, reader *ipc
 			}
 		}
 	}
+	if err := reader.Err(); err != nil {
+		diagnostics.errorf("error: %v", err)
+		return err
+	}
 
 	for i := 0; i < len(tempDataList[0]); i++ {
 		row := make([]interface{}, 0)

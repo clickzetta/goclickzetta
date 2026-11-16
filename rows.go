@@ -48,13 +48,11 @@ func (rows *clickzettaRows) Columns() []string {
 
 func (rows *clickzettaRows) Next(dest []driver.Value) error {
 	logger.Debugln("Rows.Next")
-	if rows.HasNextResultSet() {
-		err := rows.NextResultSet()
-		if err != nil {
-			return err
-		}
-	} else {
+	if !rows.HasNextResultSet() {
 		return io.EOF
+	}
+	if err := rows.NextResultSet(); err != nil {
+		return err
 	}
 	result := rows.response.Data.Data[rows.currentBatchIndex]
 	resList, ok := result.([]interface{})
@@ -106,24 +104,45 @@ func (rows *clickzettaRows) NextResultSet() error {
 	if rows.currentBatchSize > 0 && rows.currentBatchIndex < rows.currentBatchSize {
 		return nil
 	}
-	rows.currentBatchIndex = 0
-	rows.currentBatchSize = len(rows.response.Data.Data)
-	return nil
+	// Fetch batches until one has rows. A read error is returned to the
+	// caller: swallowing it would end the result set early with no error.
+	for rows.hasUnreadResultData() {
+		if err := rows.GetResultRows(); err != nil {
+			return err
+		}
+		rows.currentBatchIndex = 0
+		rows.currentBatchSize = len(rows.response.Data.Data)
+		if rows.currentBatchSize > 0 {
+			return nil
+		}
+	}
+	return io.EOF
 }
 
+// HasNextResultSet reports whether a row may still be available, either in
+// the current batch or in result data not yet read. It does not read data,
+// so it cannot hide a read error; NextResultSet does the reading.
 func (rows *clickzettaRows) HasNextResultSet() bool {
 	logger.WithContext(rows.cn.ctx).Debugln("Rows.HasNextResultSet")
 	if rows.currentBatchSize > 0 && rows.currentBatchIndex < rows.currentBatchSize {
 		return true
 	}
-	err := rows.GetResultRows()
-	if err != nil {
+	return rows.hasUnreadResultData()
+}
+
+func (rows *clickzettaRows) hasUnreadResultData() bool {
+	if rows == nil || rows.response == nil {
 		return false
 	}
-	if len(rows.response.Data.Data) == 0 {
+	data := &rows.response.Data
+	switch data.DataType {
+	case Memory:
+		return !data.MemoryRead
+	case File:
+		return data.CurrentFileIndex < len(data.FileList)
+	default:
 		return false
 	}
-	return true
 }
 
 // LazyStreamingReader lazily downloads and reads files from presigned URLs

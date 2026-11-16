@@ -534,19 +534,21 @@ func TestArrowToValueNestedTypes(t *testing.T) {
 }
 
 func TestArrowToValueErrorPaths(t *testing.T) {
-	// BINARY 不在 clickzettaTypes 里,整列直接报错。上层把这个错当成批次失败,
-	// 结果是查一个 BINARY 列拿到空结果集,不是一个能看懂的错误。
-	t.Run("BINARY_unsupported", func(t *testing.T) {
+	// BINARY 列读成 []byte,NULL 读成 nil。修复前 BINARY 不在类型表里,
+	// 整列报错,上层又把错误吞掉,查询 BINARY 列拿到空结果集。
+	t.Run("BINARY", func(t *testing.T) {
 		arr := buildArray(t, arrow.BinaryTypes.Binary, func(b array.Builder) {
 			b.(*array.BinaryBuilder).Append([]byte{0x41, 0x42})
+			b.AppendNull()
+			b.(*array.BinaryBuilder).Append([]byte{})
 		})
 		dest := make([]interface{}, arr.Len())
-		err := arrowToValue(dest, execResponseColumnType{Type: "BINARY"}, arr, time.UTC, false)
-		if err == nil {
-			t.Fatal("BINARY 现在支持了,请把它并入类型表并更新冒烟测试")
+		if err := arrowToValue(dest, execResponseColumnType{Type: "BINARY"}, arr, time.UTC, false); err != nil {
+			t.Fatalf("arrowToValue: %v", err)
 		}
-		if err.Error() != "unsupported data type" {
-			t.Errorf("err = %v, want \"unsupported data type\"", err)
+		want := []interface{}{[]byte{0x41, 0x42}, nil, []byte{}}
+		if !reflect.DeepEqual(dest, want) {
+			t.Errorf("dest = %#v, want %#v", dest, want)
 		}
 	})
 

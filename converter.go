@@ -622,6 +622,18 @@ func arrowToValue(
 			return fmt.Errorf("unsupported VECTOR arrow type: %T", srcValue)
 		}
 		return err
+	case BINARY:
+		bin, ok := srcValue.(*array.Binary)
+		if !ok {
+			return fmt.Errorf("unsupported BINARY arrow type: %T", srcValue)
+		}
+		for i := range destcol {
+			if !srcValue.IsNull(i) {
+				// Value aliases the Arrow buffer; copy so the row owns its bytes.
+				destcol[i] = append([]byte{}, bin.Value(i)...)
+			}
+		}
+		return err
 	case DATE:
 		for i, date32 := range srcValue.(*array.Date32).Date32Values() {
 			if !srcValue.IsNull(i) {
