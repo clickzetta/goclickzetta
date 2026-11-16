@@ -2,6 +2,7 @@ package goclickzetta
 
 import (
 	"database/sql/driver"
+	"errors"
 	"io"
 )
 
@@ -40,13 +41,8 @@ func (rows *clickzettaRows) Columns() []string {
 
 func (rows *clickzettaRows) Next(dest []driver.Value) error {
 	logger.Debugln("Rows.Next")
-	if rows.HasNextResultSet() {
-		err := rows.NextResultSet()
-		if err != nil {
-			return err
-		}
-	} else {
-		return io.EOF
+	if err := rows.fill(); err != nil {
+		return err
 	}
 	result := rows.response.Data.Data[rows.currentBatchIndex]
 	resList, ok := result.([]interface{})
@@ -79,33 +75,52 @@ func (rows *clickzettaRows) GetResultRows() error {
 
 func (rows *clickzettaRows) NextResultSet() error {
 	logger.WithContext(rows.cn.ctx).Debugln("Rows.NextResultSet")
+	return rows.fill()
+}
+
+// HasNextResultSet reports whether Next has something to return: a row, or
+// a read error that Next will report.
+func (rows *clickzettaRows) HasNextResultSet() bool {
+	logger.WithContext(rows.cn.ctx).Debugln("Rows.HasNextResultSet")
+	return !errors.Is(rows.fill(), io.EOF)
+}
+
+// fill makes sure the current batch has an unread row, reading result data
+// (and skipping empty batches) as needed. It returns io.EOF when all data has
+// been read. A read error is kept in rows.err and returned on every later
+// call, so it reaches the caller instead of ending the result set early.
+func (rows *clickzettaRows) fill() error {
 	if rows.currentBatchSize > 0 && rows.currentBatchIndex < rows.currentBatchSize {
 		return nil
 	}
-	if rows.currentBatchSize > 0 {
+	if rows.err != nil {
+		return rows.err
+	}
+	for rows.hasUnreadResultData() {
 		if err := rows.GetResultRows(); err != nil {
+			rows.err = err
 			return err
 		}
+		rows.currentBatchIndex = 0
+		rows.currentBatchSize = len(rows.response.Data.Data)
+		if rows.currentBatchSize > 0 {
+			return nil
+		}
 	}
-	if len(rows.response.Data.Data) == 0 {
-		return io.EOF
-	}
-	rows.currentBatchIndex = 0
-	rows.currentBatchSize = len(rows.response.Data.Data)
-	return nil
+	return io.EOF
 }
 
-func (rows *clickzettaRows) HasNextResultSet() bool {
-	logger.WithContext(rows.cn.ctx).Debugln("Rows.HasNextResultSet")
-	if rows.currentBatchSize > 0 && rows.currentBatchIndex < rows.currentBatchSize {
-		return true
-	}
-	err := rows.GetResultRows()
-	if err != nil {
+func (rows *clickzettaRows) hasUnreadResultData() bool {
+	if rows == nil || rows.response == nil {
 		return false
 	}
-	if len(rows.response.Data.Data) == 0 {
+	data := &rows.response.Data
+	switch data.DataType {
+	case Memory:
+		return !data.MemoryRead
+	case File:
+		return data.CurrentFileIndex < len(data.FileList)
+	default:
 		return false
 	}
-	return true
 }
