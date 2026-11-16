@@ -40,6 +40,9 @@ type Row struct {
 }
 
 func (row *Row) SetBoolean(columnName string, value interface{}) error {
+	if done, err := row.setNullOrCheck(columnName, value); done {
+		return err
+	}
 	v, ok := value.(bool)
 	if !ok {
 		return fmt.Errorf("cannot convert value to bool")
@@ -49,6 +52,9 @@ func (row *Row) SetBoolean(columnName string, value interface{}) error {
 }
 
 func (row *Row) SetTinyInt(columnName string, value interface{}) error {
+	if done, err := row.setNullOrCheck(columnName, value); done {
+		return err
+	}
 	v, ok := value.(int8)
 	if !ok {
 		return fmt.Errorf("cannot convert value to int8")
@@ -58,6 +64,9 @@ func (row *Row) SetTinyInt(columnName string, value interface{}) error {
 }
 
 func (row *Row) SetSmallInt(columnName string, value interface{}) error {
+	if done, err := row.setNullOrCheck(columnName, value); done {
+		return err
+	}
 	v, ok := value.(int16)
 	if !ok {
 		return fmt.Errorf("cannot convert value to int16")
@@ -67,6 +76,9 @@ func (row *Row) SetSmallInt(columnName string, value interface{}) error {
 }
 
 func (row *Row) SetInt(columnName string, value interface{}) error {
+	if done, err := row.setNullOrCheck(columnName, value); done {
+		return err
+	}
 	v, ok := value.(int32)
 	if !ok {
 		return fmt.Errorf("cannot convert value to int32")
@@ -76,6 +88,9 @@ func (row *Row) SetInt(columnName string, value interface{}) error {
 }
 
 func (row *Row) SetBigint(columnName string, value interface{}) error {
+	if done, err := row.setNullOrCheck(columnName, value); done {
+		return err
+	}
 	v, ok := value.(int64)
 	if !ok {
 		return fmt.Errorf("cannot convert value to int64")
@@ -85,6 +100,9 @@ func (row *Row) SetBigint(columnName string, value interface{}) error {
 }
 
 func (row *Row) SetFloat(columnName string, value interface{}) error {
+	if done, err := row.setNullOrCheck(columnName, value); done {
+		return err
+	}
 	v, ok := value.(float32)
 	if !ok {
 		return fmt.Errorf("cannot convert value to float32")
@@ -94,6 +112,9 @@ func (row *Row) SetFloat(columnName string, value interface{}) error {
 }
 
 func (row *Row) SetDouble(columnName string, value interface{}) error {
+	if done, err := row.setNullOrCheck(columnName, value); done {
+		return err
+	}
 	v, ok := value.(float64)
 	if !ok {
 		return fmt.Errorf("cannot convert value to float64")
@@ -103,6 +124,9 @@ func (row *Row) SetDouble(columnName string, value interface{}) error {
 }
 
 func (row *Row) SetDecimal(columnName string, value interface{}) error {
+	if done, err := row.setNullOrCheck(columnName, value); done {
+		return err
+	}
 	v, ok := value.(decimal.Decimal)
 	if !ok {
 		return fmt.Errorf("cannot convert value to decimal")
@@ -112,6 +136,9 @@ func (row *Row) SetDecimal(columnName string, value interface{}) error {
 }
 
 func (row *Row) SetString(columnName string, value interface{}) error {
+	if done, err := row.setNullOrCheck(columnName, value); done {
+		return err
+	}
 	v, ok := value.(string)
 	if !ok {
 		return fmt.Errorf("cannot convert value to string")
@@ -121,6 +148,9 @@ func (row *Row) SetString(columnName string, value interface{}) error {
 }
 
 func (row *Row) SetDate(columnName string, value interface{}) error {
+	if done, err := row.setNullOrCheck(columnName, value); done {
+		return err
+	}
 	v, ok := value.(string)
 	if !ok {
 		return fmt.Errorf("cannot convert value to date string")
@@ -130,12 +160,32 @@ func (row *Row) SetDate(columnName string, value interface{}) error {
 }
 
 func (row *Row) SetTimestamp(columnName string, value interface{}) error {
+	if done, err := row.setNullOrCheck(columnName, value); done {
+		return err
+	}
 	v, ok := value.(string)
 	if !ok {
 		return fmt.Errorf("cannot convert value to timestamp string")
 	}
 	row.ColumnNameValues[columnName] = v
 	return nil
+}
+
+// setNullOrCheck validates columnName and handles a nil value, which every
+// setter accepts as NULL. It reports done=true when the setter should return
+// err without converting value: the column is unknown, or value is nil (stored
+// as NULL). Columns are not checked when the row carries no table schema.
+func (row *Row) setNullOrCheck(columnName string, value interface{}) (done bool, err error) {
+	if len(row.Columns) > 0 {
+		if _, ok := row.Columns[columnName]; !ok {
+			return true, fmt.Errorf("table %s has no column %q", row.TableName, columnName)
+		}
+	}
+	if value == nil {
+		row.ColumnNameValues[columnName] = nil
+		return true, nil
+	}
+	return false, nil
 }
 
 // Default writer config
@@ -308,18 +358,23 @@ func (bw *BulkloadWriter) WriteRow(row *Row) error {
 	if err != nil {
 		return fmt.Errorf("async upload failed: %w", err)
 	}
+	for k, v := range bw.PartitionSpec {
+		_ = row.SetString(k, v)
+	}
+	values, err := bw.rowValues(row)
+	if err != nil {
+		return err
+	}
 	if err := bw.CheckFileStatus(); err != nil {
 		return err
 	}
 	if bw.CurrentRecordBatch == nil {
 		bw.CurrentRecordBatch = map[string][]interface{}{}
 	}
-	for k, v := range bw.PartitionSpec {
-		_ = row.SetString(k, v)
-	}
 	currentRowSize := bw.EstimateRowStaticSize
-	for col, val := range row.ColumnNameValues {
-		bw.CurrentRecordBatch[col] = append(bw.CurrentRecordBatch[col], val)
+	for i, field := range bw.ArrowSchema.Fields() {
+		val := values[i]
+		bw.CurrentRecordBatch[field.Name] = append(bw.CurrentRecordBatch[field.Name], val)
 		if s, ok := val.(string); ok {
 			currentRowSize += len(s)
 		}
@@ -336,6 +391,30 @@ func (bw *BulkloadWriter) WriteRow(row *Row) error {
 		bw.CurrentTotalBytes += bufferSize
 	}
 	return nil
+}
+
+// rowValues returns row's value for every table column, in schema order, with
+// nil for a column that was not set (written as NULL). Every column gets a
+// value so the columns of a batch always have the same number of rows. It
+// fails, before anything is buffered, on a column the table does not have or
+// a NOT NULL column without a value.
+func (bw *BulkloadWriter) rowValues(row *Row) ([]interface{}, error) {
+	schema := bw.MetaData.Table.Schema
+	for col := range row.ColumnNameValues {
+		if _, ok := schema[col]; !ok {
+			return nil, fmt.Errorf("table %s has no column %q", row.TableName, col)
+		}
+	}
+	fields := bw.ArrowSchema.Fields()
+	values := make([]interface{}, len(fields))
+	for i, field := range fields {
+		val := row.ColumnNameValues[field.Name]
+		if val == nil && !schema[field.Name].GetNullable() {
+			return nil, fmt.Errorf("column %q of table %s is NOT NULL but has no value", field.Name, row.TableName)
+		}
+		values[i] = val
+	}
+	return values, nil
 }
 
 func (bw *BulkloadWriter) Abort() error {
@@ -459,7 +538,7 @@ func (bw *BulkloadWriter) FlushRecordBatch() (int, error) {
 	for i, column := range bw.ArrowSchema.Fields() {
 		values := bw.CurrentRecordBatch[column.Name]
 		for _, value := range values {
-			if value == "" {
+			if value == nil {
 				rb.Field(i).AppendNull()
 			} else {
 				if err := AppendValueToArrowField(rb.Field(i), value, bw.MetaData.Table.Schema[column.Name]); err != nil {
@@ -486,7 +565,9 @@ func (bw *BulkloadWriter) ConstructArrowSchema() error {
 		if err != nil {
 			return err
 		}
-		arrowFields[i] = arrow.Field{Name: col.GetName(), Type: at}
+		// Without Nullable the parquet column is REQUIRED and a NULL is
+		// written as the type's zero value (0, "").
+		arrowFields[i] = arrow.Field{Name: col.GetName(), Type: at, Nullable: col.GetType().GetNullable()}
 	}
 	bw.ArrowSchema = arrow.NewSchema(arrowFields, nil)
 	return nil
