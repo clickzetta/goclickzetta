@@ -1244,7 +1244,7 @@ func (conn *ClickzettaConn) CreateBulkloadStream(option BulkloadOptions) (*Bulkl
 
 	reader := bytes.NewReader(val)
 	createBLSRes := ingestion.CreateBulkLoadStreamResponse{}
-	err = jsonpb.Unmarshal(reader, &createBLSRes)
+	err = gatewayUnmarshaler.Unmarshal(reader, &createBLSRes)
 	if err != nil {
 		logger.WithContext(conn.ctx).Errorf("create bulkload stream error: %v", err)
 		return nil, err
@@ -1319,7 +1319,7 @@ func (conn *ClickzettaConn) CommitBulkloadStream(streamId string, commitMode Bul
 	}
 	reader := bytes.NewReader(bye)
 	commitBLSRes := ingestion.CommitBulkLoadStreamResponse{}
-	err = jsonpb.Unmarshal(reader, &commitBLSRes)
+	err = gatewayUnmarshaler.Unmarshal(reader, &commitBLSRes)
 	if err != nil {
 		logger.WithContext(conn.ctx).Errorf("commit bulkload stream error: %v", err)
 		return nil, err
@@ -1364,7 +1364,7 @@ func (conn *ClickzettaConn) GetBulkloadStream(streamId string, option BulkloadOp
 	}
 	reader := bytes.NewReader(bye)
 	getBLSRes := ingestion.GetBulkLoadStreamResponse{}
-	err = jsonpb.Unmarshal(reader, &getBLSRes)
+	err = gatewayUnmarshaler.Unmarshal(reader, &getBLSRes)
 	if err != nil {
 		logger.WithContext(conn.ctx).Errorf("get bulkload stream error: %v", err)
 		return nil, err
@@ -1410,7 +1410,7 @@ func (conn *ClickzettaConn) GetDistributeBulkloadStream(streamId string, option 
 	}
 	reader := bytes.NewReader(bye)
 	getBLSRes := ingestion.GetBulkLoadStreamResponse{}
-	err = jsonpb.Unmarshal(reader, &getBLSRes)
+	err = gatewayUnmarshaler.Unmarshal(reader, &getBLSRes)
 	if err != nil {
 		logger.WithContext(conn.ctx).Errorf("get bulkload stream error: %v", err)
 		return nil, err
@@ -1475,7 +1475,7 @@ func (conn *ClickzettaConn) OpenBulkloadStreamWriter(streamId string, option Bul
 	}
 	reader := bytes.NewReader(bye)
 	openBLSWRes := ingestion.OpenBulkLoadStreamWriterResponse{}
-	err = jsonpb.Unmarshal(reader, &openBLSWRes)
+	err = gatewayUnmarshaler.Unmarshal(reader, &openBLSWRes)
 	if err != nil {
 		logger.WithContext(conn.ctx).Errorf("open bulkload stream writer error: %v", err)
 		return nil, err
@@ -1523,13 +1523,17 @@ func (conn *ClickzettaConn) FinishBulkloadStreamWriter(streamId string, option B
 
 	reader := bytes.NewReader(bye)
 	finishBLSWRes := ingestion.FinishBulkLoadStreamWriterResponse{}
-	err = jsonpb.Unmarshal(reader, &finishBLSWRes)
+	err = gatewayUnmarshaler.Unmarshal(reader, &finishBLSWRes)
 	if err != nil {
 		logger.WithContext(conn.ctx).Errorf("finish bulkload stream writer error: %v", err)
 		return nil, err
 	}
 	return finishBLSWRes.GetStatus(), nil
 }
+
+// gatewayUnmarshaler decodes gateway responses. Unknown fields are ignored so
+// that fields a newer server adds do not break older clients.
+var gatewayUnmarshaler = jsonpb.Unmarshaler{AllowUnknownFields: true}
 
 func (conn *ClickzettaConn) GateWayCall(message proto.Message, method ingestion.MethodEnum) (*fastjson.Value, error) {
 	getwayReq := ingestion.GatewayRequest{}
@@ -1557,11 +1561,11 @@ func (conn *ClickzettaConn) GateWayCall(message proto.Message, method ingestion.
 	}
 	if !jsonResponse.Exists("status") {
 		logger.WithContext(conn.ctx).Errorf("gateway call error: %v", jsonResponse.String())
-		return nil, err
+		return nil, errors.New("gateway call error: response has no status: " + jsonResponse.String())
 	}
 	gateWayStatus := ingestion.GateWayResponseStatus{}
 	reader := strings.NewReader(jsonResponse.Get("status").String())
-	err = jsonpb.Unmarshal(reader, &gateWayStatus)
+	err = gatewayUnmarshaler.Unmarshal(reader, &gateWayStatus)
 	if err != nil {
 		logger.WithContext(conn.ctx).Errorf("gateway call error: %v", err)
 		return nil, err
