@@ -75,7 +75,7 @@ test` relies on. Point it at a workspace you are willing to have tables created
 and dropped in:
 
 ```bash
-export CZ_TEST_DSN='user:password@https(api.clickzetta.com)/workspace?virtualCluster=default&instance=your_instance'
+export CZ_TEST_DSN='user:password@https(api.clickzetta.com)/public?virtualCluster=default&workspace=your_workspace&instance=your_instance'
 ```
 
 The fixture tables carry fixed names, so two integration runs against the same
@@ -97,7 +97,7 @@ type CountResult struct {
     Count int64
 }
 
-db, err := sql.Open("clickzetta", "${username}:${pwd}@${protocol}(${service}/${schema}?virtualCluster=${vc}&workspace=${workspace}&instance=${instanceName}")
+db, err := sql.Open("clickzetta", "${username}:${pwd}@${protocol}(${service})/${schema}?virtualCluster=${vc}&workspace=${workspace}&instance=${instanceName}")
 if err != nil {
     t.Error(err)
 }
@@ -122,7 +122,7 @@ for res.Next() {
 * The following example code demonstrates how to use the Go Clickzetta connection to write batch data to a Clickzetta table.
 
 ```go
-dsn := "${username}:${pwd}@${protocol}(${service}/${schema}?virtualCluster=${vc}&workspace=${workspace}&instance=${instanceName}"
+dsn := "${username}:${pwd}@${protocol}(${service})/${schema}?virtualCluster=${vc}&workspace=${workspace}&instance=${instanceName}"
 conn, err := connect(dsn)
 if err != nil {
 t.Error(err)
@@ -154,11 +154,11 @@ More examples can be found in the [examples](https://github.com/clickzetta/gocli
 The Data Source Name has a common format, like the following:
 
 ```
-${username}:${pwd}@${protocol}(${service}/${schema}?virtualCluster=${vc}&workspace=${workspace}&instance=${instanceName}
+${username}:${pwd}@${protocol}(${service})/${schema}?virtualCluster=${vc}&workspace=${workspace}&instance=${instanceName}
 ```
 * **username**: The username of the Clickzetta account.
 * **pwd**: The password of the Clickzetta account.
-* **protocol**: The protocol of the Clickzetta service. The default value is https.(http,tcp ...)
+* **protocol**: `https` or `http`. Since v0.0.20 it may be omitted, as in `${username}:${pwd}@(${service})/...`, and then defaults to `https`. Releases up to and including v0.0.19 fail with `unsupported protocol scheme ""` when it is omitted, so write it out when you depend on those versions.
 * **service**: The Clickzetta service name.
 * **schema**: The Clickzetta schema name.
 * **vc**: The Clickzetta virtual cluster name.
@@ -173,7 +173,7 @@ Additional parameters can be appended to the DSN as query string key-value pairs
 
 Example DSN with `separate_params`:
 ```
-${username}:${pwd}@${protocol}(${service}/${schema}?virtualCluster=${vc}&workspace=${workspace}&instance=${instanceName}&separate_params=true
+${username}:${pwd}@${protocol}(${service})/${schema}?virtualCluster=${vc}&workspace=${workspace}&instance=${instanceName}&separate_params=true
 ```
 
 * **cz.sql.string.literal.escape.mode**: How the driver escapes string literals it interpolates into a statement. The resolved mode is also sent to the server as a query hint of the same name, so both sides agree on how to read the literal. Accepted values:
