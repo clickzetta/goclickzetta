@@ -238,6 +238,9 @@ const (
 	errorCodeRequestStatusUnknown = "CZLH-60022"
 	errorCodeRequestNotSubmitted  = "CZLH-60023"
 	defaultMaxRetries             = 10
+	// defaultSubmitHoldSeconds is how long the server may hold a HYBRID
+	// submit before answering with the job still running.
+	defaultSubmitHoldSeconds = 30
 )
 
 // getMaxRetries returns the configured max retries or the default value
@@ -480,6 +483,14 @@ func (conn *ClickzettaConn) execInternal(ctx context.Context, query string, bind
 	}
 	mergeDriverFlagHints(hints, flags, escapeMode)
 
+	// The server holds a HYBRID submit for up to submitHold seconds. A shorter
+	// sdk.job.timeout must shorten the hold, otherwise the job cannot be
+	// stopped before the server answers the submit.
+	submitHold := defaultSubmitHoldSeconds
+	if sdkJobTimeout > 0 && sdkJobTimeout < submitHold {
+		submitHold = sdkJobTimeout
+	}
+
 	isSeparate := false
 	if conn.cfg.Params != nil {
 		if value, ok := conn.cfg.Params["separate_params"]; ok && value != nil {
@@ -554,7 +565,7 @@ func (conn *ClickzettaConn) execInternal(ctx context.Context, query string, bind
 		JobName:              "SQL_JOB",
 		UserId:               0,
 		JobRequestMode:       HYBRID,
-		HybirdPollingTimeout: 30,
+		HybirdPollingTimeout: int64(submitHold),
 		JobConfig:            map[string]interface{}{},
 		SQLJob:               &sqljob,
 		JobTimeout:           3000,
@@ -587,13 +598,23 @@ func (conn *ClickzettaConn) execInternal(ctx context.Context, query string, bind
 	var responseJson *fastjson.Value
 	var stream []byte
 	var lastErr error
+	// sdk.job.timeout counts from the first submit, so the time the server
+	// holds the submit is part of the limit.
+	jobStart := time.Now()
 
 	for tried := 1; tried <= maxRetries && !conn.jobIsCancelled(); tried++ {
 		submitStart := trace.start()
-		responseJson, stream, err = GetHttpResponseMsgToJson(headers, string(SubmitJobRequestPath), conn, jsonData)
+		responseJson, stream, err = getHTTPResponseJSON(ctx, headers, string(SubmitJobRequestPath), conn, jsonData)
 		if err != nil {
 			if trace.enabled {
 				trace.record(id.ID, "submit_job_error", submitStart, "attempt", tried, "error", err)
+			}
+			// The caller gave up: stop instead of retrying a request that
+			// will fail the same way.
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				finalResponse.Success = false
+				finalResponse.Message = err.Error()
+				return finalResponse, err
 			}
 			lastErr = err
 			logger.WithContext(ctx).Errorf("submitJob exception, jobid: %v, tried %d/%d, error: %v", id.ID, tried, maxRetries, err)
@@ -633,7 +654,7 @@ func (conn *ClickzettaConn) execInternal(ctx context.Context, query string, bind
 				return finalResponse, errors.New(errMsg)
 			}
 			// previous submit succeeded, go directly to poll result
-			finalResponse, err = conn.retryGetResult(ctx, id, headers, sdkJobTimeout, finalResponse, maxRetries)
+			finalResponse, err = conn.retryGetResultSince(ctx, id, headers, sdkJobTimeout, jobStart, finalResponse, maxRetries)
 			if err != nil {
 				if isJobNotExistError(err) {
 					logger.WithContext(ctx).Errorf("job %v not found during polling after JOB_ALREADY_EXIST, retrying submit (%d/%d)", id.ID, tried, maxRetries)
@@ -657,7 +678,7 @@ func (conn *ClickzettaConn) execInternal(ctx context.Context, query string, bind
 
 		if status == "QUEUEING" || status == "RUNNING" || status == "SETUP" {
 			// job is running, poll for result
-			finalResponse, err = conn.retryGetResult(ctx, id, headers, sdkJobTimeout, finalResponse, maxRetries)
+			finalResponse, err = conn.retryGetResultSince(ctx, id, headers, sdkJobTimeout, jobStart, finalResponse, maxRetries)
 			if err != nil {
 				// JOB_NOT_EXIST during polling: retry submit
 				if isJobNotExistError(err) {
@@ -760,6 +781,12 @@ func isGetJobResultFailed(responseJson *fastjson.Value) bool {
 
 // retryGetResult polls for job result with retry and exponential backoff (aligned with Java retryGetResult)
 func (conn *ClickzettaConn) retryGetResult(ctx context.Context, id jobId, headers map[string]string, timeout int, finalResponse *execResponse, maxRetries int) (*execResponse, error) {
+	return conn.retryGetResultSince(ctx, id, headers, timeout, time.Now(), finalResponse, maxRetries)
+}
+
+// retryGetResultSince polls for the job result. timeout (seconds, 0 for no
+// limit) is measured from startTime, which execInternal sets to the submit.
+func (conn *ClickzettaConn) retryGetResultSince(ctx context.Context, id jobId, headers map[string]string, timeout int, startTime time.Time, finalResponse *execResponse, maxRetries int) (*execResponse, error) {
 	trace := conn.newTimingTrace(ctx, nil)
 	retryStart := trace.start()
 	pollCount := 0
@@ -792,7 +819,6 @@ func (conn *ClickzettaConn) retryGetResult(ctx context.Context, id jobId, header
 		return finalResponse, err
 	}
 
-	startTime := time.Now()
 	exceptionRetryCount := 0 // counts network/parsing errors
 	pollIntervalMs := 50
 	exceptionSleepMs := 50
@@ -943,12 +969,17 @@ func (conn *ClickzettaConn) retryGetResult(ctx context.Context, id jobId, header
 }
 
 func GetHttpResponseMsgToJson(headers map[string]string, path string, connection *ClickzettaConn, jsonData []byte) (*fastjson.Value, []byte, error) {
+	return getHTTPResponseJSON(connection.ctx, headers, path, connection, jsonData)
+}
+
+// getHTTPResponseJSON posts jsonData under ctx and parses the JSON response.
+func getHTTPResponseJSON(ctx context.Context, headers map[string]string, path string, connection *ClickzettaConn, jsonData []byte) (*fastjson.Value, []byte, error) {
 	url, err := url.Parse(connection.cfg.Service + path)
 	if err != nil {
 		logger.WithContext(connection.ctx).Errorf("GetHttpResponseMsgToJson error:%v", err)
 		return nil, nil, err
 	}
-	res, err := connection.internal.Post(connection.ctx, url, headers, jsonData, 0)
+	res, err := connection.internal.Post(ctx, url, headers, jsonData, 0)
 
 	if err != nil {
 		logger.WithContext(connection.ctx).Errorf("GetHttpResponseMsgToJson  error: %v", err)

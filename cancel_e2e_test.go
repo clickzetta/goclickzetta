@@ -32,8 +32,8 @@ func openE2EConn(t *testing.T) *ClickzettaConn {
 }
 
 // SDK 自己的超时看门狗要能取消真实作业。
-// 查询必须睡过 HybirdPollingTimeout(30s)：submit 会在服务端 hold 住这段时间，
-// 只有之后进入 retryGetResult 才开始按 sdk.job.timeout 计时并触发取消。
+// sdk.job.timeout 从提交时开始计时；小于 30s 时 submit 在服务端的 hold 时间
+// 也缩短到同样的秒数，之后第一次轮询就会触发取消。
 // 取消请求由 checkJobTimeout 内部发出，带 user_agent=gosdk_by_timeout。
 func TestE2ECancel_SDKTimeoutCancelsRunningJob(t *testing.T) {
 	conn := openE2EConn(t)
