@@ -86,7 +86,18 @@ type ClickzettaConn struct {
 	jobMu        sync.Mutex
 	currentJobId *jobId
 	jobCancelled bool
+
+	// tokenMu guards cfg.Token and tokenAt. A login token is renewed once
+	// tokenRefresh has passed since the last login attempt, as JDBC does;
+	// tokenRefresh is 0 for a caller-provided magic_token, which is never
+	// renewed.
+	tokenMu      sync.Mutex
+	tokenAt      time.Time
+	tokenRefresh time.Duration
 }
+
+// defaultTokenRefresh matches JDBC's default token_expire_time_ms.
+const defaultTokenRefresh = time.Hour
 
 const traceTimingFlag = "trace_timing"
 
@@ -465,21 +476,29 @@ func (conn *ClickzettaConn) execInternal(ctx context.Context, query string, bind
 	query = multiQueries[len(multiQueries)-1]
 	query = query + "\n;"
 
-	for _, hint := range multiQueries[:len(multiQueries)-1] {
-		hintKV := strings.Split(hint, "=")
-		if len(hintKV) != 2 {
-			logger.WithContext(ctx).Errorf("invalid query hint format, hint_length=%d", len(hint))
-			return nil, driver.ErrSkip
+	// cz.* parameters in the DSN are SQL parameters for the server. The SQL
+	// prefix overrides them, and WithDriverFlags overrides both.
+	for k, v := range conn.cfg.Params {
+		if strings.HasPrefix(k, "cz.") && v != nil {
+			hints[k] = *v
 		}
-		if hintKV[0] == "sdk.job.timeout" {
-			timeout, err := strconv.Atoi(hintKV[1])
+	}
+
+	settings := multiQueries[:len(multiQueries)-1]
+	for i, hint := range settings {
+		key, value, err := parsePrefixHint(hint)
+		if err != nil {
+			return nil, fmt.Errorf("statement %d of %d: %w", i+1, len(multiQueries), err)
+		}
+		if key == "sdk.job.timeout" {
+			timeout, err := strconv.Atoi(value)
 			if err != nil {
-				return nil, fmt.Errorf("invalid sdk.job.timeout hint %q: %w", hintKV[1], err)
+				return nil, fmt.Errorf("invalid sdk.job.timeout hint %q: %w", value, err)
 			}
 			sdkJobTimeout = timeout
 			continue
 		}
-		hints[hintKV[0]] = hintKV[1]
+		hints[key] = value
 	}
 	mergeDriverFlagHints(hints, flags, escapeMode)
 
@@ -590,7 +609,7 @@ func (conn *ClickzettaConn) execInternal(ctx context.Context, query string, bind
 	headers := make(map[string]string)
 	headers["Content-Type"] = "application/json"
 	headers["instanceName"] = conn.cfg.Instance
-	headers["X-ClickZetta-Token"] = conn.cfg.Token
+	headers["X-ClickZetta-Token"] = conn.token(ctx)
 
 	// submit job with retry logic (aligned with Java CZStatement.submitJob)
 	maxRetries := conn.getMaxRetries()
@@ -918,7 +937,9 @@ func (conn *ClickzettaConn) retryGetResultSince(ctx context.Context, id jobId, h
 			logger.WithContext(ctx).Errorf("get job error, no status field, jobid: %v, response_bytes: %d", id.ID, len(stream))
 			finalResponse.Success = false
 			finalResponse.Message = "get job error: missing status field"
-			return finalResponse, driver.ErrBadConn
+			// Not driver.ErrBadConn: the job is already submitted, and
+			// database/sql would run the statement again on a new connection.
+			return finalResponse, fmt.Errorf("get job error: missing status field, jobid: %s", id.ID)
 		}
 
 		if responseJson.Get("status").Exists("state") {
@@ -1048,7 +1069,7 @@ func (conn *ClickzettaConn) authHeaders() map[string]string {
 	headers := make(map[string]string)
 	headers["Content-Type"] = "application/json"
 	headers["instanceName"] = conn.cfg.Instance
-	headers["X-ClickZetta-Token"] = conn.cfg.Token
+	headers["X-ClickZetta-Token"] = conn.token(conn.ctx)
 	return headers
 }
 
@@ -1402,7 +1423,7 @@ func (conn *ClickzettaConn) CreateBulkloadStream(option BulkloadOptions) (*Bulkl
 	userIdent.Workspace = conn.cfg.Workspace
 	userIdent.UserName = conn.cfg.UserName
 	account.UserIdent = &userIdent
-	account.Token = conn.cfg.Token
+	account.Token = conn.token(conn.ctx)
 	createBulkloadStreamReq.Account = &account
 	tableIdentifier := ingestion.TableIdentifier{}
 	tableIdentifier.SchemaName = conn.cfg.Schema
@@ -1494,7 +1515,7 @@ func (conn *ClickzettaConn) GateWayCall(message proto.Message, method ingestion.
 	headers := make(map[string]string)
 	headers["Content-Type"] = "application/json"
 	headers["instanceName"] = conn.cfg.Instance
-	headers["X-ClickZetta-Token"] = conn.cfg.Token
+	headers["X-ClickZetta-Token"] = conn.token(conn.ctx)
 	jsonResponse, _, err := GetHttpResponseMsgToJson(headers, string(GETWAYPATH), conn, []byte(getwayReqMes))
 	if err != nil {
 		logger.WithContext(conn.ctx).Errorf("gateway call error: %v", err)
@@ -1554,6 +1575,43 @@ func buildClickzettaConn(ctx context.Context, config Config) (*ClickzettaConn, e
 		return conn, nil
 	}
 
+	conn.tokenRefresh = defaultTokenRefresh
+	if v, ok := config.Params["token_expire_time_ms"]; ok && v != nil {
+		ms, err := strconv.ParseInt(*v, 10, 64)
+		if err != nil || ms <= 0 {
+			return nil, fmt.Errorf("invalid token_expire_time_ms %q: want a positive number of milliseconds", *v)
+		}
+		conn.tokenRefresh = time.Duration(ms) * time.Millisecond
+	}
+	token, err := conn.login(ctx)
+	if err != nil {
+		return nil, err
+	}
+	conn.cfg.Token = token
+	conn.tokenAt = time.Now()
+	return conn, nil
+}
+
+// token returns the token for the next request, logging in again first when
+// the refresh period has passed. As in JDBC, a failed refresh is logged and
+// the current token is kept; the next attempt waits another period.
+func (conn *ClickzettaConn) token(ctx context.Context) string {
+	conn.tokenMu.Lock()
+	defer conn.tokenMu.Unlock()
+	if conn.tokenRefresh > 0 && time.Since(conn.tokenAt) >= conn.tokenRefresh {
+		conn.tokenAt = time.Now()
+		if token, err := conn.login(ctx); err != nil {
+			logger.WithContext(ctx).Errorf("failed to refresh token, keeping the current one: %v", err)
+		} else {
+			conn.cfg.Token = token
+		}
+	}
+	return conn.cfg.Token
+}
+
+// login calls loginSingle with the configured user and returns the token.
+func (conn *ClickzettaConn) login(ctx context.Context) (string, error) {
+	config := conn.cfg
 	loginPrarams := make(map[string]string)
 	loginPrarams["username"] = config.UserName
 	loginPrarams["password"] = config.Password
@@ -1563,7 +1621,7 @@ func buildClickzettaConn(ctx context.Context, config Config) (*ClickzettaConn, e
 	jsonValue, err := json.Marshal(loginPrarams)
 	if err != nil {
 		logger.WithContext(ctx).Errorf("json format login parmams error: %v", err)
-		return nil, err
+		return "", err
 	}
 	headers := make(map[string]string)
 	headers["Content-Type"] = "application/json"
@@ -1571,31 +1629,45 @@ func buildClickzettaConn(ctx context.Context, config Config) (*ClickzettaConn, e
 	res, err := conn.internal.Post(ctx, url, headers, jsonValue, 0)
 	if err != nil {
 		logger.WithContext(ctx).Errorf("login error: %v", err)
-		return nil, err
+		return "", err
 	}
 
 	defer res.Body.Close()
 	stream, err := io.ReadAll(res.Body)
 	if err != nil {
 		logger.WithContext(ctx).Errorf("read login response error: %v", err)
-		return nil, err
+		return "", err
 	}
 	body, err := fastjson.ParseBytes(stream)
 	if err != nil {
 		logger.WithContext(ctx).Errorf("parse login response to json error: %v", err)
-		return nil, err
+		return "", err
 	}
 	if body.Exists("data") && body.Get("data").Exists("token") {
-		conn.cfg.Token = strings.ReplaceAll(body.Get("data").Get("token").String(), "\"", "")
+		return strings.ReplaceAll(body.Get("data").Get("token").String(), "\"", ""), nil
 	} else {
 		// the server explains login failures (bad credentials, unknown instance) in the
 		// response body; surface that reason instead of dumping the raw body, which may
 		// carry a token on other code paths.
 		err = errors.New("login failed: " + formatLoginFailure(body))
 		logger.WithContext(ctx).Errorf("login error: %v, response_bytes: %d", err, len(stream))
-		return nil, err
+		return "", err
 	}
+}
 
-	return conn, nil
-
+// parsePrefixHint parses one SQL parameter written before the statement, in
+// the form `name=value` or, as in JDBC, `SET name=value`. Only the first '='
+// separates the name from the value, and blanks around both are dropped.
+func parsePrefixHint(hint string) (key, value string, err error) {
+	s := strings.TrimSpace(hint)
+	if len(s) > 4 && strings.EqualFold(s[:3], "set") && (s[3] == ' ' || s[3] == '\t' || s[3] == '\n' || s[3] == '\r') {
+		s = strings.TrimSpace(s[4:])
+	}
+	key, value, found := strings.Cut(s, "=")
+	key = strings.TrimSpace(key)
+	if !found || key == "" {
+		// The text may hold credentials, so only its length is reported.
+		return "", "", fmt.Errorf("only the last statement may be SQL; the statements before it must be <name>=<value> settings (got %d characters that are not one)", len(s))
+	}
+	return key, strings.TrimSpace(value), nil
 }
